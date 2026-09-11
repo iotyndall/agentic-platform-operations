@@ -19,12 +19,17 @@
     "build": "pnpm build",
     "migrationCheck": "bash .agentic/check-migrations.sh",
     "integration": "",
+    "browser": "",
+    "contract": "",
+    "performance": "",
+    "stagingVerify": "",
     "productionVerify": "node scripts/booking-health.mjs"
   },
   "risk": {
-    "protectedPathRegex": "^(\\.github/|\\.env|scripts/migrations/|drizzle\\.config\\.|middleware\\.)|(^|/)(auth|payment|secret|credential)(/|\\.)",
+    "protectedPathRegex": "^(\\.github/|\\.agentic/|\\.env|scripts/migrations/|drizzle\\.config\\.|middleware\\.)|(^|/)(auth|payment|security|secret|credential)(/|\\.)",
     "maxAutonomousProductionLines": 60,
     "maxRepairAttempts": 2,
+    "unknownRiskDefaultsTo": "high",
     "escalationDomains": [
       "authentication",
       "authorization",
@@ -40,13 +45,27 @@
     "criticalAdvisoryAllowlist": [
       "GHSA-p293-qw3h-jr36",
       "GHSA-2xp9-vwfh-vxw4"
-    ]
+    ],
+    "requirePinnedActions": true
   },
   "infrastructure": {
     "deploymentProvider": "Vercel",
     "database": "Postgres/Drizzle",
     "observability": ["GitHub Actions", "Vercel"],
     "externalSystems": ["Hospitable Direct Booking"]
+  },
+  "environments": {
+    "development": {"name": "development", "protected": false, "credentials": "none"},
+    "staging": {"name": "staging", "protected": false, "credentials": "none"},
+    "production": {"name": "production", "protected": true, "credentials": "environment"}
+  },
+  "evidence": {
+    "sources": [
+      {"id": "vercel", "kind": "deployments", "redactionRequired": true, "customerContentAllowed": false},
+      {"id": "booking-synthetic", "kind": "synthetics", "redactionRequired": false, "customerContentAllowed": false},
+      {"id": "github-actions", "kind": "other", "redactionRequired": true, "customerContentAllowed": false}
+    ],
+    "artifactRetentionDays": 30
   },
   "production": {
     "criticalJourneys": [
@@ -59,10 +78,27 @@
       }
     ]
   },
+  "slo": {
+    "defaultsRef": "iotyndall/agentic-platform-operations/slo/defaults.yaml",
+    "errorBudgetGating": false,
+    "objectives": [
+      {"id": "booking-path-availability", "target": 0.999, "windowDays": 30, "description": "Successful property-site to Hospitable booking handoff checks."}
+    ]
+  },
+  "mitigations": [],
+  "release": {
+    "stagingEnvironment": "staging",
+    "productionEnvironment": "production",
+    "deploymentConcurrencyGroup": "deploy-production-mesa",
+    "rollbackRunbook": "runbooks/failed-deployment.md",
+    "requireIndependentReview": true
+  },
   "repair": {
     "enabled": false,
     "minimumConfidence": "high",
     "issueLabel": "auto-triage",
-    "provenanceRegex": ""
+    "provenanceRegex": "",
+    "reproductionRequired": true,
+    "allowedEvidenceKinds": ["unit", "integration", "browser", "contract", "configuration", "synthetic"]
   }
 }
