@@ -6,16 +6,16 @@
   "additionalProperties": false,
   "required": ["version", "project", "runtime", "commands", "risk", "production"],
   "properties": {
-    "version": { "type": "integer", "const": 1 },
+    "version": {"type": "integer", "const": 1},
     "project": {
       "type": "object",
       "additionalProperties": false,
       "required": ["name", "repository", "defaultBranch", "autonomyLevel"],
       "properties": {
-        "name": { "type": "string", "minLength": 1 },
-        "repository": { "type": "string", "pattern": "^[^/]+/[^/]+$" },
-        "defaultBranch": { "type": "string", "minLength": 1 },
-        "autonomyLevel": { "type": "integer", "minimum": 0, "maximum": 5 }
+        "name": {"type": "string", "minLength": 1},
+        "repository": {"type": "string", "pattern": "^[^/]+/[^/]+$"},
+        "defaultBranch": {"type": "string", "minLength": 1},
+        "autonomyLevel": {"type": "integer", "minimum": 0, "maximum": 5}
       }
     },
     "runtime": {
@@ -23,10 +23,10 @@
       "additionalProperties": false,
       "required": ["kind"],
       "properties": {
-        "kind": { "enum": ["node", "python", "mixed", "other"] },
-        "nodeVersion": { "type": "string" },
-        "pythonVersion": { "type": "string" },
-        "packageManager": { "enum": ["pnpm", "npm", "yarn", "none"] }
+        "kind": {"enum": ["node", "python", "mixed", "other"]},
+        "nodeVersion": {"type": "string"},
+        "pythonVersion": {"type": "string"},
+        "packageManager": {"enum": ["pnpm", "npm", "yarn", "none"]}
       }
     },
     "commands": {
@@ -34,14 +34,18 @@
       "additionalProperties": false,
       "required": ["install", "build"],
       "properties": {
-        "install": { "type": "string" },
-        "typecheck": { "type": "string" },
-        "test": { "type": "string" },
-        "lint": { "type": "string" },
-        "build": { "type": "string" },
-        "migrationCheck": { "type": "string" },
-        "integration": { "type": "string" },
-        "productionVerify": { "type": "string" }
+        "install": {"type": "string"},
+        "typecheck": {"type": "string"},
+        "test": {"type": "string"},
+        "lint": {"type": "string"},
+        "build": {"type": "string"},
+        "migrationCheck": {"type": "string"},
+        "integration": {"type": "string"},
+        "browser": {"type": "string"},
+        "contract": {"type": "string"},
+        "performance": {"type": "string"},
+        "stagingVerify": {"type": "string"},
+        "productionVerify": {"type": "string"}
       }
     },
     "risk": {
@@ -49,36 +53,61 @@
       "additionalProperties": false,
       "required": ["protectedPathRegex", "maxAutonomousProductionLines", "maxRepairAttempts", "escalationDomains"],
       "properties": {
-        "protectedPathRegex": { "type": "string", "minLength": 1 },
-        "maxAutonomousProductionLines": { "type": "integer", "minimum": 1, "maximum": 500 },
-        "maxRepairAttempts": { "type": "integer", "minimum": 1, "maximum": 5 },
-        "escalationDomains": {
-          "type": "array",
-          "items": { "type": "string", "minLength": 1 },
-          "uniqueItems": true
-        }
+        "protectedPathRegex": {"type": "string", "minLength": 1},
+        "maxAutonomousProductionLines": {"type": "integer", "minimum": 1, "maximum": 500},
+        "maxRepairAttempts": {"type": "integer", "minimum": 1, "maximum": 5},
+        "unknownRiskDefaultsTo": {"enum": ["high", "critical"]},
+        "escalationDomains": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true}
       }
     },
     "security": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "dependencyAuditCommand": { "type": "string" },
-        "criticalAdvisoryAllowlist": {
-          "type": "array",
-          "items": { "type": "string", "pattern": "^GHSA-[a-z0-9-]+$" },
-          "uniqueItems": true
-        }
+        "dependencyAuditCommand": {"type": "string"},
+        "criticalAdvisoryAllowlist": {"type": "array", "items": {"type": "string", "pattern": "^GHSA-[a-z0-9-]+$"}, "uniqueItems": true},
+        "requirePinnedActions": {"type": "boolean"}
       }
     },
     "infrastructure": {
       "type": "object",
       "additionalProperties": true,
       "properties": {
-        "deploymentProvider": { "type": "string" },
-        "database": { "type": "string" },
-        "observability": { "type": "array", "items": { "type": "string" } },
-        "externalSystems": { "type": "array", "items": { "type": "string" } }
+        "deploymentProvider": {"type": "string"},
+        "database": {"type": "string"},
+        "observability": {"type": "array", "items": {"type": "string"}},
+        "externalSystems": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "environments": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "development": {"$ref": "#/$defs/environment"},
+        "staging": {"$ref": "#/$defs/environment"},
+        "production": {"$ref": "#/$defs/environment"}
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "kind", "redactionRequired"],
+            "properties": {
+              "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
+              "kind": {"enum": ["logs", "traces", "metrics", "synthetics", "deployments", "security", "database-status", "other"]},
+              "redactionRequired": {"type": "boolean"},
+              "customerContentAllowed": {"type": "boolean"},
+              "notes": {"type": "string"}
+            }
+          }
+        },
+        "artifactRetentionDays": {"type": "integer", "minimum": 1, "maximum": 3650}
       }
     },
     "production": {
@@ -94,24 +123,88 @@
             "additionalProperties": false,
             "required": ["id", "description", "owner"],
             "properties": {
-              "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
-              "description": { "type": "string", "minLength": 1 },
-              "owner": { "enum": ["local", "central"] },
-              "command": { "type": "string" },
-              "severityOnFailure": { "enum": ["P0", "P1", "P2"] }
+              "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
+              "description": {"type": "string", "minLength": 1},
+              "owner": {"enum": ["local", "central"]},
+              "command": {"type": "string"},
+              "severityOnFailure": {"enum": ["P0", "P1", "P2"]}
             }
           }
         }
+      }
+    },
+    "slo": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "defaultsRef": {"type": "string"},
+        "errorBudgetGating": {"type": "boolean"},
+        "objectives": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "target", "windowDays"],
+            "properties": {
+              "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
+              "target": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+              "windowDays": {"type": "integer", "minimum": 1, "maximum": 365},
+              "description": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    "mitigations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "type", "runbook", "autonomousAllowed", "reversible"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
+          "type": {"enum": ["rollback", "retry-idempotent-job", "disable-feature-flag", "scale-worker", "other"]},
+          "runbook": {"type": "string", "minLength": 1},
+          "autonomousAllowed": {"type": "boolean"},
+          "reversible": {"type": "boolean"},
+          "validationCommand": {"type": "string"},
+          "maxAttempts": {"type": "integer", "minimum": 1, "maximum": 10}
+        }
+      }
+    },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "stagingEnvironment": {"type": "string"},
+        "productionEnvironment": {"type": "string"},
+        "deploymentConcurrencyGroup": {"type": "string"},
+        "rollbackRunbook": {"type": "string"},
+        "requireIndependentReview": {"type": "boolean"}
       }
     },
     "repair": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "enabled": { "type": "boolean" },
-        "minimumConfidence": { "enum": ["high", "medium"] },
-        "issueLabel": { "type": "string" },
-        "provenanceRegex": { "type": "string" }
+        "enabled": {"type": "boolean"},
+        "minimumConfidence": {"enum": ["high", "medium"]},
+        "issueLabel": {"type": "string"},
+        "provenanceRegex": {"type": "string"},
+        "reproductionRequired": {"type": "boolean"},
+        "allowedEvidenceKinds": {"type": "array", "items": {"enum": ["unit", "integration", "browser", "contract", "configuration", "synthetic", "performance"]}, "uniqueItems": true}
+      }
+    }
+  },
+  "$defs": {
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "protected"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "protected": {"type": "boolean"},
+        "credentials": {"enum": ["none", "repository", "environment", "oidc"]}
       }
     }
   }
