@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Dependency-free validation for platform-ops project contracts.
 
-This intentionally validates the safety-critical subset without requiring a
-JSON Schema package on every caller. The JSON Schema remains the human/tooling
-contract; this script is the CI backstop for invariants we never want to lose.
+The JSON Schema is the structural contract. This script enforces safety
+invariants that connected projects are not allowed to weaken silently.
 """
 
 from __future__ import annotations
@@ -20,6 +19,15 @@ DEFAULT_ESCALATION = {
     "destructive-data",
     "irreversible-migrations",
     "payments",
+}
+ALLOWED_EVIDENCE = {
+    "unit",
+    "integration",
+    "browser",
+    "contract",
+    "configuration",
+    "synthetic",
+    "performance",
 }
 
 
@@ -65,6 +73,8 @@ def validate(path: Path) -> None:
     attempts = risk.get("maxRepairAttempts")
     if not isinstance(attempts, int) or not 1 <= attempts <= 5:
         fail(path, "maxRepairAttempts must be 1..5")
+    if risk.get("unknownRiskDefaultsTo", "high") not in {"high", "critical"}:
+        fail(path, "unknown risk must default to high or critical")
 
     domains = set(risk.get("escalationDomains") or [])
     missing = DEFAULT_ESCALATION - domains
@@ -76,6 +86,28 @@ def validate(path: Path) -> None:
     for advisory in allowlist:
         if not re.fullmatch(r"GHSA-[a-z0-9-]+", advisory):
             fail(path, f"invalid GHSA advisory id: {advisory}")
+    if security.get("requirePinnedActions") is False:
+        fail(path, "security.requirePinnedActions cannot be false")
+
+    environments = data.get("environments") or {}
+    production_env = environments.get("production")
+    if production_env:
+        if production_env.get("protected") is not True:
+            fail(path, "production environment must be protected")
+        if production_env.get("credentials") not in {"environment", "oidc"}:
+            fail(path, "production credentials must be environment-scoped or OIDC")
+
+    evidence = data.get("evidence") or {}
+    seen_sources: set[str] = set()
+    for source in evidence.get("sources") or []:
+        sid = str(source.get("id", ""))
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", sid):
+            fail(path, f"invalid evidence source id: {sid!r}")
+        if sid in seen_sources:
+            fail(path, f"duplicate evidence source id: {sid}")
+        seen_sources.add(sid)
+        if source.get("customerContentAllowed") is True:
+            fail(path, f"evidence source {sid} may not expose customer content in v1 autonomous workflows")
 
     production = data.get("production") or {}
     journeys = production.get("criticalJourneys") or []
@@ -92,6 +124,26 @@ def validate(path: Path) -> None:
         if journey.get("owner") not in {"local", "central"}:
             fail(path, f"journey {jid} owner must be local|central")
 
+    mitigation_ids: set[str] = set()
+    for mitigation in data.get("mitigations") or []:
+        mid = str(mitigation.get("id", ""))
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", mid):
+            fail(path, f"invalid mitigation id: {mid!r}")
+        if mid in mitigation_ids:
+            fail(path, f"duplicate mitigation id: {mid}")
+        mitigation_ids.add(mid)
+        if mitigation.get("autonomousAllowed"):
+            if mitigation.get("reversible") is not True:
+                fail(path, f"autonomous mitigation {mid} must be reversible")
+            if not str(mitigation.get("runbook", "")).strip():
+                fail(path, f"autonomous mitigation {mid} requires a runbook")
+            if not str(mitigation.get("validationCommand", "")).strip():
+                fail(path, f"autonomous mitigation {mid} requires a validationCommand")
+
+    release = data.get("release") or {}
+    if release and release.get("requireIndependentReview") is False:
+        fail(path, "release.requireIndependentReview cannot be false")
+
     repair = data.get("repair") or {}
     if repair.get("enabled"):
         if project.get("autonomyLevel", 0) < 2:
@@ -100,6 +152,14 @@ def validate(path: Path) -> None:
             fail(path, "v1 autonomous repair requires high confidence")
         if not repair.get("issueLabel"):
             fail(path, "repair.issueLabel is required when repair is enabled")
+        if repair.get("reproductionRequired") is not True:
+            fail(path, "autonomous repair requires executable reproduction evidence")
+        kinds = set(repair.get("allowedEvidenceKinds") or [])
+        if not kinds:
+            fail(path, "repair.allowedEvidenceKinds is required when repair is enabled")
+        unknown = kinds - ALLOWED_EVIDENCE
+        if unknown:
+            fail(path, f"unknown repair evidence kinds: {sorted(unknown)}")
         provenance = repair.get("provenanceRegex") or ""
         if provenance:
             try:
@@ -117,7 +177,7 @@ def main(argv: list[str]) -> int:
         path = Path(raw)
         try:
             validate(path)
-        except Exception as exc:  # deliberate aggregate reporting
+        except Exception as exc:
             failures.append(str(exc))
         else:
             print(f"OK  {path}")
