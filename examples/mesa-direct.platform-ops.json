@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "project": {
+    "name": "Mesa Direct",
+    "repository": "iotyndall/mesa-direct",
+    "defaultBranch": "main",
+    "autonomyLevel": 1
+  },
+  "runtime": {
+    "kind": "node",
+    "nodeVersion": "22",
+    "packageManager": "pnpm"
+  },
+  "commands": {
+    "install": "pnpm install --frozen-lockfile",
+    "typecheck": "pnpm exec tsc --noEmit",
+    "test": "",
+    "lint": "pnpm exec next lint",
+    "build": "pnpm build",
+    "migrationCheck": "bash .agentic/check-migrations.sh",
+    "integration": "",
+    "productionVerify": "node scripts/booking-health.mjs"
+  },
+  "risk": {
+    "protectedPathRegex": "^(\\.github/|\\.env|scripts/migrations/|drizzle\\.config\\.|middleware\\.)|(^|/)(auth|payment|secret|credential)(/|\\.)",
+    "maxAutonomousProductionLines": 60,
+    "maxRepairAttempts": 2,
+    "escalationDomains": [
+      "authentication",
+      "authorization",
+      "secrets",
+      "destructive-data",
+      "irreversible-migrations",
+      "payments",
+      "booking-provider-mapping"
+    ]
+  },
+  "security": {
+    "dependencyAuditCommand": "pnpm audit --prod --json",
+    "criticalAdvisoryAllowlist": [
+      "GHSA-p293-qw3h-jr36",
+      "GHSA-2xp9-vwfh-vxw4"
+    ]
+  },
+  "infrastructure": {
+    "deploymentProvider": "Vercel",
+    "database": "Postgres/Drizzle",
+    "observability": ["GitHub Actions", "Vercel"],
+    "externalSystems": ["Hospitable Direct Booking"]
+  },
+  "production": {
+    "criticalJourneys": [
+      {
+        "id": "direct-booking-handoff",
+        "description": "Every directly bookable public property site loads, renders the exact expected Hospitable widget mapping, and can reach Hospitable without TLS/connection/5xx failure.",
+        "owner": "local",
+        "command": "node scripts/booking-health.mjs",
+        "severityOnFailure": "P1"
+      }
+    ]
+  },
+  "repair": {
+    "enabled": false,
+    "minimumConfidence": "high",
+    "issueLabel": "auto-triage",
+    "provenanceRegex": ""
+  }
+}
