@@ -1,0 +1,27 @@
+name: Platform Incident Closure
+
+on:
+  workflow_dispatch:
+    inputs:
+      incident_issue:
+        required: true
+        type: string
+      remediation_pr:
+        required: true
+        type: string
+      learning_pr:
+        required: true
+        type: string
+
+jobs:
+  close:
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: write
+    uses: iotyndall/agentic-platform-operations/.github/workflows/reusable-incident-closure.yml@PINNED_REF
+    with:
+      incident_issue: ${{ inputs.incident_issue }}
+      remediation_pr: ${{ inputs.remediation_pr }}
+      learning_pr: ${{ inputs.learning_pr }}
+      close_when_ready: true
