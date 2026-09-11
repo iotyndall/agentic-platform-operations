@@ -1,0 +1,20 @@
+name: Platform security
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '37 14 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: platform-security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  security:
+    uses: iotyndall/agentic-platform-operations/.github/workflows/reusable-security.yml@PINNED_REF
