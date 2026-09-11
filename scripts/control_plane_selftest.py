@@ -103,6 +103,18 @@ def assert_dispatch_permission_contract() -> None:
             fail(f"caller caps dispatch workflow below required contents: write: {caller_name}")
 
 
+def assert_caller_permission_caps() -> None:
+    pr_gate = (TEMPLATES / "platform-pr-gate.yml").read_text(encoding="utf-8")
+    for required in ("contents: read", "pull-requests: read", "issues: write"):
+        if not re.search(rf"^\s{{2}}{re.escape(required)}\s*$", pr_gate, re.M):
+            fail(f"PR gate caller lacks permission required by reusable reviewers: {required}")
+
+    feature = (TEMPLATES / "platform-feature-builder.yml").read_text(encoding="utf-8")
+    for required in ("contents: write", "pull-requests: write", "issues: write"):
+        if not re.search(rf"^\s{{2}}{re.escape(required)}\s*$", feature, re.M):
+            fail(f"Feature Builder caller lacks permission required by reusable workflow: {required}")
+
+
 def assert_routing_boundaries() -> None:
     router = workflow_text("reusable-issue-router.yml")
     dispatcher = workflow_text("reusable-incident-dispatcher.yml")
@@ -179,6 +191,7 @@ def main() -> None:
         assert_action_pinning,
         assert_read_only_model_jobs,
         assert_dispatch_permission_contract,
+        assert_caller_permission_caps,
         assert_routing_boundaries,
         assert_repair_boundary,
         assert_release_recovery_boundaries,
