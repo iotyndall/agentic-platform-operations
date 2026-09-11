@@ -1,0 +1,96 @@
+name: Platform Pre-authorized Mitigation
+
+on:
+  repository_dispatch:
+    types: [agentic-mitigation]
+  workflow_dispatch:
+    inputs:
+      incident_issue:
+        required: true
+        type: string
+      mitigation_id:
+        required: true
+        type: string
+      attempt_number:
+        required: true
+        type: number
+
+concurrency:
+  group: production-mitigation
+  cancel-in-progress: false
+
+jobs:
+  values:
+    runs-on: ubuntu-latest
+    outputs:
+      incident: ${{ steps.v.outputs.incident }}
+      mitigation: ${{ steps.v.outputs.mitigation }}
+      attempt: ${{ steps.v.outputs.attempt }}
+    steps:
+      - id: v
+        env:
+          INCIDENT: ${{ github.event.client_payload.incident_issue || inputs.incident_issue }}
+          MITIGATION: ${{ github.event.client_payload.mitigation_id || inputs.mitigation_id }}
+          ATTEMPT: ${{ github.event.client_payload.attempt_number || inputs.attempt_number }}
+        run: |
+          echo "incident=$INCIDENT" >> "$GITHUB_OUTPUT"
+          echo "mitigation=$MITIGATION" >> "$GITHUB_OUTPUT"
+          echo "attempt=$ATTEMPT" >> "$GITHUB_OUTPUT"
+
+  gate:
+    needs: values
+    permissions:
+      contents: read
+      issues: read
+    uses: iotyndall/agentic-platform-operations/.github/workflows/reusable-mitigation-gate.yml@PINNED_REF
+    with:
+      incident_issue: ${{ needs.values.outputs.incident }}
+      mitigation_id: ${{ needs.values.outputs.mitigation }}
+      attempt_number: ${{ fromJSON(needs.values.outputs.attempt) }}
+
+  apply:
+    needs: [values, gate]
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PLATFORM_MITIGATION_TOKEN: ${{ secrets.PLATFORM_MITIGATION_TOKEN }}
+      PLATFORM_DEPLOY_AUX: ${{ secrets.PLATFORM_DEPLOY_AUX }}
+      MITIGATION_ID: ${{ needs.values.outputs.mitigation }}
+      VALIDATION_COMMAND: ${{ needs.gate.outputs.validation_command }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Apply only the named local mitigation adapter
+        run: bash scripts/platform-ops/apply-mitigation.sh "$MITIGATION_ID"
+      - name: Verify mitigation using contract-declared check
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/mitigation-verify.out"
+          set +e
+          bash -euo pipefail -c "$VALIDATION_COMMAND" >"$OUT" 2>&1
+          RC=$?
+          set -e
+          DIGEST="$(sha256sum "$OUT" | awk '{print $1}')"
+          rm -f "$OUT"
+          test "$RC" -eq 0 || { echo "::error::Mitigation verification failed; raw output withheld; sha256=$DIGEST"; exit "$RC"; }
+          echo "Mitigation verification passed; evidence sha256=$DIGEST"
+
+  record:
+    needs: [values, gate, apply]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - run: |
+          if [ '${{ needs.apply.result }}' = success ]; then
+            gh issue comment '${{ needs.values.outputs.incident }}' --repo "$GITHUB_REPOSITORY" --body "Pre-authorized mitigation \`${{ needs.values.outputs.mitigation }}\` completed and its configured validation passed. Continue root-cause diagnosis/repair; mitigation is not incident closure."
+          else
+            gh issue comment '${{ needs.values.outputs.incident }}' --repo "$GITHUB_REPOSITORY" --body "Mitigation \`${{ needs.values.outputs.mitigation }}\` failed or could not be verified. Escalate; do not broaden autonomous production actions."
+            exit 1
+          fi
