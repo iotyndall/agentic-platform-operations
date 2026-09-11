@@ -65,38 +65,9 @@ jobs:
           cat "$RUNNER_TEMP/audit.stderr" >&2 || true
           cat "$RUNNER_TEMP/audit.json"
 
-          python - "$RUNNER_TEMP/audit.json" "$RUNNER_TEMP/found-critical-ghsa.txt" <<'PY'
-          import json, re, sys
-
-          source, destination = sys.argv[1:]
-          try:
-              with open(source, encoding='utf-8') as f:
-                  data = json.load(f)
-          except Exception as exc:
-              raise SystemExit(f'::error::Dependency audit did not emit parseable JSON: {exc}')
-
-          advisories = data.get('advisories')
-          if not isinstance(advisories, dict):
-              raise SystemExit('::error::Dependency audit JSON has no advisories object; refusing ambiguous security evidence.')
-
-          critical = []
-          malformed = []
-          for advisory in advisories.values():
-              if str(advisory.get('severity', '')).lower() != 'critical':
-                  continue
-              ghsa = advisory.get('github_advisory_id')
-              if not isinstance(ghsa, str) or not re.fullmatch(r'GHSA-[A-Za-z0-9-]+', ghsa):
-                  malformed.append(str(ghsa))
-                  continue
-              critical.append(ghsa)
-
-          if malformed:
-              raise SystemExit('::error::Critical advisories were present without valid GHSA IDs: ' + ', '.join(malformed))
-
-          with open(destination, 'w', encoding='utf-8') as f:
-              for ghsa in sorted(set(critical)):
-                  f.write(ghsa + '\n')
-          PY
+          python scripts/extract_critical_advisories.py \
+            "$RUNNER_TEMP/audit.json" \
+            "$RUNNER_TEMP/found-critical-ghsa.txt"
 
           if [ ! -s "$RUNNER_TEMP/found-critical-ghsa.txt" ]; then
             if [ "$status" -ne 0 ]; then
