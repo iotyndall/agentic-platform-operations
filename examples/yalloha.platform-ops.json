@@ -20,12 +20,17 @@
     "build": "pnpm build",
     "migrationCheck": "echo 'Use the existing Supabase migration replay + tenant-isolation CI job'",
     "integration": "",
+    "browser": "",
+    "contract": "",
+    "performance": "",
+    "stagingVerify": "",
     "productionVerify": "python .github/scripts/daily_yalloha_agent.py --self-test"
   },
   "risk": {
-    "protectedPathRegex": "^(\\.github/|\\.env|supabase/migrations/|drizzle\\.config\\.|middleware\\.)|(^|/)(auth|stripe|payment|secret|credential)(/|\\.)",
+    "protectedPathRegex": "^(\\.github/|\\.agentic/|\\.env|supabase/migrations/|drizzle\\.config\\.|middleware\\.)|(^|/)(auth|stripe|payment|security|secret|credential)(/|\\.)",
     "maxAutonomousProductionLines": 60,
     "maxRepairAttempts": 2,
+    "unknownRiskDefaultsTo": "high",
     "escalationDomains": [
       "authentication",
       "authorization",
@@ -39,7 +44,8 @@
   },
   "security": {
     "dependencyAuditCommand": "pnpm audit --prod --json",
-    "criticalAdvisoryAllowlist": []
+    "criticalAdvisoryAllowlist": [],
+    "requirePinnedActions": true
   },
   "infrastructure": {
     "deploymentProvider": "Vercel",
@@ -47,11 +53,25 @@
     "observability": ["Sentry", "Vercel", "Supabase", "GitHub Actions"],
     "externalSystems": ["Meta Graph API", "Trigger.dev", "Stripe", "Anthropic"]
   },
+  "environments": {
+    "development": {"name": "development", "protected": false, "credentials": "none"},
+    "staging": {"name": "staging", "protected": false, "credentials": "environment"},
+    "production": {"name": "production", "protected": true, "credentials": "environment"}
+  },
+  "evidence": {
+    "sources": [
+      {"id": "sentry", "kind": "logs", "redactionRequired": true, "customerContentAllowed": false},
+      {"id": "vercel", "kind": "deployments", "redactionRequired": true, "customerContentAllowed": false},
+      {"id": "supabase-status", "kind": "database-status", "redactionRequired": true, "customerContentAllowed": false},
+      {"id": "github-actions", "kind": "other", "redactionRequired": true, "customerContentAllowed": false}
+    ],
+    "artifactRetentionDays": 30
+  },
   "production": {
     "criticalJourneys": [
       {
         "id": "production-health-signals",
-        "description": "Runtime/build/database/application signals remain observable and the health agent never interprets missing telemetry as a clean result.",
+        "description": "Runtime/build/database/application signals remain observable and missing telemetry is never interpreted as clean health.",
         "owner": "local",
         "command": "python .github/scripts/daily_yalloha_agent.py --self-test",
         "severityOnFailure": "P1"
@@ -72,10 +92,25 @@
       }
     ]
   },
+  "slo": {
+    "defaultsRef": "iotyndall/agentic-platform-operations/slo/defaults.yaml",
+    "errorBudgetGating": false,
+    "objectives": []
+  },
+  "mitigations": [],
+  "release": {
+    "stagingEnvironment": "staging",
+    "productionEnvironment": "production",
+    "deploymentConcurrencyGroup": "deploy-production-yalloha",
+    "rollbackRunbook": "runbooks/failed-deployment.md",
+    "requireIndependentReview": true
+  },
   "repair": {
     "enabled": true,
     "minimumConfidence": "high",
     "issueLabel": "auto-triage",
-    "provenanceRegex": "<!--[[:space:]]*yalloha-agent:[[:space:]]*fp=[a-z0-9][a-z0-9-]*[[:space:]]+seen=[0-9]+[[:space:]]+last=[^[:space:]]+[[:space:]]*-->"
+    "provenanceRegex": "<!--[[:space:]]*yalloha-agent:[[:space:]]*fp=[a-z0-9][a-z0-9-]*[[:space:]]+seen=[0-9]+[[:space:]]+last=[^[:space:]]+[[:space:]]*-->",
+    "reproductionRequired": true,
+    "allowedEvidenceKinds": ["unit", "integration", "browser", "contract", "configuration", "synthetic"]
   }
 }
