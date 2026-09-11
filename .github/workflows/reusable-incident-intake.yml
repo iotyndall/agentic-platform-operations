@@ -35,7 +35,13 @@ jobs:
       issue_number: ${{ steps.route.outputs.issue_number }}
       fingerprint_hash: ${{ steps.validate.outputs.fingerprint_hash }}
     env:
+      # `gh` needs to know which repository it is acting on. This job posts its
+      # result and never checks the source out, so without this it dies on its
+      # first call with "fatal: not a git repository". Naming the repo is the
+      # right half of that fix — a checkout would drag in a source tree this
+      # job does not read.
       GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
       INCIDENT_JSON: ${{ inputs.incident_json }}
     steps:
       - name: Validate narrow incident metadata and reject obvious sensitive content

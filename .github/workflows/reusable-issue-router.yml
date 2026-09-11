@@ -86,6 +86,13 @@ jobs:
       issues: write
     env:
       GH_TOKEN: ${{ github.token }}
+      # Without this the job dies on its first `gh` call with
+      # "fatal: not a git repository". `classify` gets away with it because it
+      # checks the repository out; `apply` never does, and does not need to —
+      # it only labels an issue and dispatches an event. Naming the repo is the
+      # cheaper half of that fix than adding a checkout to carry a source tree
+      # nothing here reads.
+      GH_REPO: ${{ github.repository }}
       ISSUE_NUMBER: ${{ inputs.issue_number }}
       KIND: ${{ needs.classify.outputs.kind }}
     steps:

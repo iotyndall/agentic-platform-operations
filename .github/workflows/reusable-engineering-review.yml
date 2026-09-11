@@ -95,7 +95,13 @@ jobs:
       pull-requests: read
       issues: write
     env:
+      # `gh` needs to know which repository it is acting on. This job posts its
+      # result and never checks the source out, so without this it dies on its
+      # first call with "fatal: not a git repository". Naming the repo is the
+      # right half of that fix — a checkout would drag in a source tree this
+      # job does not read.
       GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
       PR_NUMBER: ${{ inputs.pull_request_number }}
       EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
       REVIEW_JSON: ${{ needs.analyze.outputs.review_json }}
