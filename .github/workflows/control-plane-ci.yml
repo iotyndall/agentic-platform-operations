@@ -79,6 +79,9 @@ jobs:
       - name: Run live integration contract regression tests
         run: python scripts/integration_contract_selftest.py
 
+      - name: Run dependency-audit parser regression tests
+        run: python scripts/test_extract_critical_advisories.py
+
       - name: Compile Python control-plane scripts
         run: python -m py_compile scripts/*.py
 
