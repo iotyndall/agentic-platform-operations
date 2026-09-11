@@ -1,0 +1,34 @@
+name: Platform bounded repair
+
+on:
+  repository_dispatch:
+    types: [agentic-auto-repair]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'Canonical incident issue number'
+        required: true
+        type: string
+      issue_url:
+        description: 'Optional canonical incident URL'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: read
+
+concurrency:
+  group: platform-bounded-repair
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    uses: iotyndall/agentic-platform-operations/.github/workflows/reusable-bounded-repair.yml@PINNED_REF
+    with:
+      issue_number: ${{ github.event.client_payload.issue_number || inputs.issue_number }}
+      issue_url: ${{ github.event.client_payload.issue_url || inputs.issue_url || '' }}
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
