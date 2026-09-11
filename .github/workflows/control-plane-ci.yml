@@ -91,6 +91,16 @@ jobs:
             echo "::error::$count central workflow callers exist but only $pinned require PINNED_REF"; exit 1
           }
 
+      - name: Assert dependency parser supports npm audit v1 and v2
+        shell: bash
+        run: |
+          set -euo pipefail
+          f=.github/workflows/reusable-security.yml
+          grep -Fq "data.get('advisories')" "$f"
+          grep -Fq "data.get('vulnerabilities')" "$f"
+          grep -Fq "metadata_critical" "$f"
+          grep -Fq "Regression checks execute inside the exact parser" "$f"
+
       - name: Assert model analysis and deterministic mutation are separate jobs
         shell: bash
         run: |
