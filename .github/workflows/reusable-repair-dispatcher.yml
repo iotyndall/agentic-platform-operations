@@ -1,0 +1,101 @@
+name: Reusable repair dispatcher
+
+on:
+  workflow_call:
+    inputs:
+      config_path:
+        required: false
+        type: string
+        default: '.agentic/platform-ops.json'
+      dispatch_label:
+        required: false
+        type: string
+        default: 'repair-dispatched'
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: repair-dispatch-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CONFIG_PATH: ${{ inputs.config_path }}
+      DISPATCH_LABEL: ${{ inputs.dispatch_label }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: false
+
+      - name: Select at most one eligible incident
+        id: select
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f "$CONFIG_PATH"
+          jq -e '.repair.enabled == true' "$CONFIG_PATH" >/dev/null || {
+            echo 'Repair disabled by project contract.'
+            echo 'found=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+
+          ISSUE_LABEL="$(jq -r '.repair.issueLabel' "$CONFIG_PATH")"
+          PROVENANCE_RE="$(jq -r '.repair.provenanceRegex // ""' "$CONFIG_PATH")"
+
+          gh label create "$DISPATCH_LABEL" --color 0e8a16 --description 'Central bounded-repair workflow has been dispatched' --force >/dev/null 2>&1 || true
+          gh issue list --state open --label "$ISSUE_LABEL" --limit 100 --json number,title,body,labels,url,createdAt > "$RUNNER_TEMP/issues.json"
+
+          python - "$RUNNER_TEMP/issues.json" "$PROVENANCE_RE" "$DISPATCH_LABEL" <<'PY' > "$RUNNER_TEMP/selected.json"
+          import json, re, sys
+          path, provenance, dispatched_label = sys.argv[1:]
+          issues = json.load(open(path, encoding='utf-8'))
+          issues.sort(key=lambda x: x.get('createdAt') or '')
+          selected = None
+          for issue in issues:
+              labels = {x.get('name') for x in issue.get('labels', [])}
+              body = issue.get('body') or ''
+              if dispatched_label in labels:
+                  continue
+              if '**Auto-PR eligible:** `True`' not in body:
+                  continue
+              if '**Confidence:** `high`' not in body:
+                  continue
+              if provenance and not re.search(provenance, body):
+                  continue
+              selected = {k: issue.get(k) for k in ('number', 'title', 'url')}
+              break
+          json.dump(selected or {}, sys.stdout)
+          PY
+
+          NUMBER="$(jq -r '.number // empty' "$RUNNER_TEMP/selected.json")"
+          if [ -z "$NUMBER" ]; then
+            echo 'No undispatched high-confidence repair candidate.'
+            echo 'found=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          echo "issue_number=$NUMBER" >> "$GITHUB_OUTPUT"
+          echo "issue_url=$(jq -r '.url' "$RUNNER_TEMP/selected.json")" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch bounded repair
+        if: steps.select.outputs.found == 'true'
+        shell: bash
+        env:
+          ISSUE_NUMBER: ${{ steps.select.outputs.issue_number }}
+          ISSUE_URL: ${{ steps.select.outputs.issue_url }}
+        run: |
+          set -euo pipefail
+          jq -n \
+            --argjson number "$ISSUE_NUMBER" \
+            --arg url "$ISSUE_URL" \
+            '{event_type:"agentic-auto-repair", client_payload:{issue_number:$number, issue_url:$url}}' \
+            | gh api --method POST "repos/$GITHUB_REPOSITORY/dispatches" --input -
+
+          gh issue edit "$ISSUE_NUMBER" --add-label "$DISPATCH_LABEL"
+          gh issue comment "$ISSUE_NUMBER" --body 'Bounded autonomous repair dispatched through the centralized platform-operations control plane. The repair lane may open a PR; it cannot merge or deploy directly.'
