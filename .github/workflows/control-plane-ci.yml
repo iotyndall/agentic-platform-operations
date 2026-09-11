@@ -101,7 +101,8 @@ jobs:
           product = Path('.github/workflows/reusable-product-intake.yml').read_text()
 
           checks = {
-              'router defines feature kind': 'kind:feature' in router,
+              'router defines feature category': '- feature: new or changed product capability/behavior' in router,
+              'router labels by classified kind': 'LABEL="kind:$KIND"' in router,
               'router does not grant repair marker': '**Auto-PR eligible:** `True`' not in router,
               'dispatcher explicitly excludes feature': "'kind:feature' in labels" in dispatch,
               'dispatcher requires defect/incident kinds': "{'kind:bug', 'kind:incident'}" in dispatch,
