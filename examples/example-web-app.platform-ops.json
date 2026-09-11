@@ -1,8 +1,8 @@
 {
   "version": 1,
   "project": {
-    "name": "Mesa Direct",
-    "repository": "iotyndall/mesa-direct",
+    "name": "Example Web App",
+    "repository": "example-org/example-web-app",
     "defaultBranch": "main",
     "autonomyLevel": 1
   },
@@ -51,19 +51,51 @@
   "infrastructure": {
     "deploymentProvider": "Vercel",
     "database": "Postgres/Drizzle",
-    "observability": ["GitHub Actions", "Vercel"],
-    "externalSystems": ["Hospitable Direct Booking"]
+    "observability": [
+      "GitHub Actions",
+      "Vercel"
+    ],
+    "externalSystems": [
+      "Third-Party Booking Provider"
+    ]
   },
   "environments": {
-    "development": {"name": "development", "protected": false, "credentials": "none"},
-    "staging": {"name": "staging", "protected": false, "credentials": "none"},
-    "production": {"name": "production", "protected": true, "credentials": "environment"}
+    "development": {
+      "name": "development",
+      "protected": false,
+      "credentials": "none"
+    },
+    "staging": {
+      "name": "staging",
+      "protected": false,
+      "credentials": "none"
+    },
+    "production": {
+      "name": "production",
+      "protected": true,
+      "credentials": "environment"
+    }
   },
   "evidence": {
     "sources": [
-      {"id": "vercel", "kind": "deployments", "redactionRequired": true, "customerContentAllowed": false},
-      {"id": "booking-synthetic", "kind": "synthetics", "redactionRequired": false, "customerContentAllowed": false},
-      {"id": "github-actions", "kind": "other", "redactionRequired": true, "customerContentAllowed": false}
+      {
+        "id": "vercel",
+        "kind": "deployments",
+        "redactionRequired": true,
+        "customerContentAllowed": false
+      },
+      {
+        "id": "booking-synthetic",
+        "kind": "synthetics",
+        "redactionRequired": false,
+        "customerContentAllowed": false
+      },
+      {
+        "id": "github-actions",
+        "kind": "other",
+        "redactionRequired": true,
+        "customerContentAllowed": false
+      }
     ],
     "artifactRetentionDays": 30
   },
@@ -71,7 +103,7 @@
     "criticalJourneys": [
       {
         "id": "direct-booking-handoff",
-        "description": "Every directly bookable public property site loads, renders the exact expected Hospitable widget mapping, and can reach Hospitable without TLS/connection/5xx failure.",
+        "description": "Every public property site loads, renders the exact expected third-party booking widget mapping, and can reach the provider without TLS/connection/5xx failure.",
         "owner": "local",
         "command": "node scripts/booking-health.mjs",
         "severityOnFailure": "P1"
@@ -82,14 +114,19 @@
     "defaultsRef": "iotyndall/agentic-platform-operations/slo/defaults.yaml",
     "errorBudgetGating": false,
     "objectives": [
-      {"id": "booking-path-availability", "target": 0.999, "windowDays": 30, "description": "Successful property-site to Hospitable booking handoff checks."}
+      {
+        "id": "booking-path-availability",
+        "target": 0.999,
+        "windowDays": 30,
+        "description": "Successful property-site to Hospitable booking handoff checks."
+      }
     ]
   },
   "mitigations": [],
   "release": {
     "stagingEnvironment": "staging",
     "productionEnvironment": "production",
-    "deploymentConcurrencyGroup": "deploy-production-mesa",
+    "deploymentConcurrencyGroup": "deploy-production-web-app",
     "rollbackRunbook": "runbooks/failed-deployment.md",
     "requireIndependentReview": true
   },
@@ -99,6 +136,13 @@
     "issueLabel": "auto-triage",
     "provenanceRegex": "",
     "reproductionRequired": true,
-    "allowedEvidenceKinds": ["unit", "integration", "browser", "contract", "configuration", "synthetic"]
+    "allowedEvidenceKinds": [
+      "unit",
+      "integration",
+      "browser",
+      "contract",
+      "configuration",
+      "synthetic"
+    ]
   }
 }

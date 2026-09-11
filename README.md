@@ -51,7 +51,7 @@ The platform is intentionally **not** an all-powerful autonomous engineer. Agent
 - `runbooks/` — versioned pre-authorized mitigation/recovery policies.
 - `slo/defaults.yaml` — conservative SLO and error-budget defaults.
 - `incident-library/` — curated post-incident operational memory.
-- `examples/` — Mesa Direct and YALLOHA project contracts.
+- `examples/` — two reference project contracts: a web app with a third-party booking handoff, and a multi-tenant SaaS platform.
 - `.github/workflows/reusable-issue-router.yml` — conservative first-class issue classification.
 - `.github/workflows/reusable-product-intake.yml` — Claude Product Agent + independent read-only Codex adversarial review.
 - `.github/workflows/reusable-policy.yml` — deterministic changed-file risk classification.
