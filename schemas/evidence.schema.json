@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agentic Platform Operations Evidence Bundle",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["bundleId", "incidentId", "createdAt", "scope", "artifacts", "handling"],
+  "properties": {
+    "bundleId": {"type": "string", "minLength": 1},
+    "incidentId": {"type": "string", "pattern": "^INC-"},
+    "createdAt": {"type": "string", "format": "date-time"},
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["service", "environment", "timeRange"],
+      "properties": {
+        "service": {"type": "string", "minLength": 1},
+        "environment": {"enum": ["development", "staging", "production"]},
+        "timeRange": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["start", "end"],
+          "properties": {
+            "start": {"type": "string", "format": "date-time"},
+            "end": {"type": "string", "format": "date-time"}
+          }
+        }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind", "reference", "sha256", "redactionStatus", "containsCustomerContent"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "kind": {"enum": ["log", "trace", "metric", "test-output", "synthetic-output", "deployment-manifest", "configuration", "security-result", "other"]},
+          "reference": {"type": "string", "minLength": 1},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "redactionStatus": {"enum": ["redacted", "not-needed", "blocked"]},
+          "containsCustomerContent": {"type": "boolean"},
+          "summary": {"type": "string"}
+        }
+      }
+    },
+    "handling": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["secretsScrubbed", "customerDataScrubbed", "retentionClass"],
+      "properties": {
+        "secretsScrubbed": {"type": "boolean", "const": true},
+        "customerDataScrubbed": {"type": "boolean", "const": true},
+        "retentionClass": {"enum": ["ephemeral", "incident", "security-restricted"]},
+        "notes": {"type": "string"}
+      }
+    }
+  }
+}
