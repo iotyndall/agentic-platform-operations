@@ -47,40 +47,26 @@ jobs:
           python - <<'PY' >> "$GITHUB_OUTPUT"
           import hashlib, json, os, re
           from pathlib import Path
-
-          p = Path(os.environ['RUNNER_TEMP']) / 'incident.json'
-          d = json.loads(p.read_text())
-          required = ['incidentId','status','severity','service','environment','detectedAt','signal','impact','evidence','deployment']
-          missing = [k for k in required if k not in d]
+          p=Path(os.environ['RUNNER_TEMP'])/'incident.json'; d=json.loads(p.read_text())
+          required=['incidentId','status','severity','service','environment','detectedAt','signal','impact','evidence','deployment']
+          missing=[k for k in required if k not in d]
           if missing: raise SystemExit(f'missing incident fields: {missing}')
           if d['status'] not in {'detected','triaging','mitigating','reproducing','repairing','verifying','resolved','escalated'}: raise SystemExit('invalid status')
           if d['severity'] not in {'SEV-1','SEV-2','SEV-3','SEV-4'}: raise SystemExit('invalid severity')
           if d['environment'] not in {'development','staging','production'}: raise SystemExit('invalid environment')
-          sig = d.get('signal') or {}
+          sig=d.get('signal') or {}
           for k in ('source','type','summary'):
               if not str(sig.get(k,'')).strip(): raise SystemExit(f'missing signal.{k}')
-          fp = str(sig.get('fingerprint') or '').strip()
+          fp=str(sig.get('fingerprint') or '').strip()
           if not fp: raise SystemExit('signal.fingerprint is required for deduplication')
-          if not isinstance(d.get('evidence'), list) or not d['evidence']: raise SystemExit('at least one evidence reference is required')
+          if not isinstance(d.get('evidence'),list) or not d['evidence']: raise SystemExit('at least one evidence reference is required')
           for e in d['evidence']:
               if e.get('redacted') is not True: raise SystemExit('all evidence references must be explicitly redacted')
               if not str(e.get('reference','')).strip(): raise SystemExit('evidence reference required')
-
-          # GitHub receives metadata only. This is a defense-in-depth detector, not a sanitizer.
-          text = p.read_text()
-          patterns = [
-              r'(?i)authorization\s*[:=]\s*bearer\s+\S+',
-              r'\bAKIA[0-9A-Z]{16}\b',
-              r'\bgh[pousr]_[A-Za-z0-9_]{20,}\b',
-              r'\bsk-[A-Za-z0-9_-]{20,}\b',
-              r'eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}',
-              r'(?i)(password|passwd|api[_-]?key|client[_-]?secret)\s*[:=]\s*["\']?[^\s,"\']{8,}'
-          ]
-          for pat in patterns:
-              if re.search(pat, text): raise SystemExit('incident metadata appears to contain a credential/token; refuse GitHub intake')
-
-          h = hashlib.sha256(fp.encode()).hexdigest()
-          print(f'fingerprint_hash={h}')
+          text=p.read_text()
+          patterns=[r'(?i)authorization\s*[:=]\s*bearer\s+\S+',r'\bAKIA[0-9A-Z]{16}\b',r'\bgh[pousr]_[A-Za-z0-9_]{20,}\b',r'\bsk-[A-Za-z0-9_-]{20,}\b',r'eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}',r'(?i)(password|passwd|api[_-]?key|client[_-]?secret)\s*[:=]\s*["\']?[^\s,"\']{8,}']
+          if any(re.search(pat,text) for pat in patterns): raise SystemExit('incident metadata appears to contain a credential/token; refuse GitHub intake')
+          print('fingerprint_hash='+hashlib.sha256(fp.encode()).hexdigest())
           PY
 
       - name: Create or deduplicate canonical incident issue
@@ -91,50 +77,19 @@ jobs:
           DISPATCH_TRIAGE: ${{ inputs.dispatch_triage }}
         run: |
           set -euo pipefail
-          FILE="$RUNNER_TEMP/incident.json"
-          MARKER="<!-- agentic-incident:v1 fp=$FP_HASH -->"
+          FILE="$RUNNER_TEMP/incident.json"; MARKER="<!-- agentic-incident:v1 fp=$FP_HASH -->"
           gh issue list --state open --label incident --limit 100 --json number,body,url > "$RUNNER_TEMP/open-incidents.json" || printf '[]' > "$RUNNER_TEMP/open-incidents.json"
           NUMBER="$(jq -r --arg marker "$MARKER" '.[] | select((.body // "") | contains($marker)) | .number' "$RUNNER_TEMP/open-incidents.json" | head -1)"
-
-          SEV="$(jq -r '.severity' "$FILE")"
-          SERVICE="$(jq -r '.service' "$FILE")"
-          SIGNAL="$(jq -r '.signal.type' "$FILE")"
-          SUMMARY="$(jq -r '.signal.summary' "$FILE")"
-          SOURCE="$(jq -r '.signal.source' "$FILE")"
-          SERVICE_SLUG="$(printf '%s' "$SERVICE" | tr '[:upper:] ' '[:lower:]-' | tr -cd 'a-z0-9._-' | cut -c1-35)"
-          SOURCE_SLUG="$(printf '%s' "$SOURCE" | tr '[:upper:] ' '[:lower:]-' | tr -cd 'a-z0-9._-' | cut -c1-35)"
-
-          for spec in "incident:5319e7" "kind:incident:5319e7" "severity:${SEV,,}:b60205" "signal:$SIGNAL:fbca04" "service:$SERVICE_SLUG:0e8a16" "source:$SOURCE_SLUG:c5def5" "agent:triage-pending:d4c5f9"; do
-            color="${spec##*:}"; label="${spec%:*}"
-            gh label create "$label" --color "$color" --force >/dev/null 2>&1 || true
-          done
-
+          SEV="$(jq -r '.severity' "$FILE")"; SERVICE="$(jq -r '.service' "$FILE")"; SIGNAL="$(jq -r '.signal.type' "$FILE")"; SUMMARY="$(jq -r '.signal.summary' "$FILE")"; SOURCE="$(jq -r '.signal.source' "$FILE")"
+          SERVICE_SLUG="$(printf '%s' "$SERVICE" | tr '[:upper:] ' '[:lower:]-' | tr -cd 'a-z0-9._-' | cut -c1-35)"; SOURCE_SLUG="$(printf '%s' "$SOURCE" | tr '[:upper:] ' '[:lower:]-' | tr -cd 'a-z0-9._-' | cut -c1-35)"
+          for spec in "incident:5319e7" "kind:incident:5319e7" "severity:${SEV,,}:b60205" "signal:$SIGNAL:fbca04" "service:$SERVICE_SLUG:0e8a16" "source:$SOURCE_SLUG:c5def5" "agent:triage-pending:d4c5f9"; do color="${spec##*:}"; label="${spec%:*}"; gh label create "$label" --color "$color" --force >/dev/null 2>&1 || true; done
           BODY="$RUNNER_TEMP/incident-body.md"
-          {
-            echo "$MARKER"
-            echo '## Structured incident record'
-            echo
-            echo '```json'
-            cat "$FILE"
-            echo
-            echo '```'
-            echo
-            echo '_Evidence entries are redacted references/metadata only. Do not paste raw production logs or customer content into this issue._'
-          } > "$BODY"
-
+          { echo "$MARKER"; echo '## Structured incident record'; echo; echo '```json'; cat "$FILE"; echo; echo '```'; echo; echo '_Evidence entries are redacted references/metadata only. Do not paste raw production logs or customer content into this issue._'; } > "$BODY"
           if [ -z "$NUMBER" ]; then
-            TITLE="[$SEV] $SERVICE — $SUMMARY"
-            NUMBER="$(gh issue create --title "$TITLE" --body-file "$BODY" --label incident --label kind:incident --label "severity:${SEV,,}" --label "signal:$SIGNAL" --label "service:$SERVICE_SLUG" --label "source:$SOURCE_SLUG" --label agent:triage-pending --json number --jq .number 2>/dev/null || true)"
-            if [ -z "$NUMBER" ]; then
-              URL="$(gh issue create --title "$TITLE" --body-file "$BODY" --label incident --label kind:incident --label "severity:${SEV,,}" --label "signal:$SIGNAL" --label "service:$SERVICE_SLUG" --label "source:$SOURCE_SLUG" --label agent:triage-pending)"
-              NUMBER="${URL##*/}"
-            fi
+            URL="$(gh issue create --title "[$SEV] $SERVICE — $SUMMARY" --body-file "$BODY" --label incident --label kind:incident --label "severity:${SEV,,}" --label "signal:$SIGNAL" --label "service:$SERVICE_SLUG" --label "source:$SOURCE_SLUG" --label agent:triage-pending)"
+            NUMBER="${URL##*/}"
           else
             gh issue comment "$NUMBER" --body-file "$BODY"
           fi
           echo "issue_number=$NUMBER" >> "$GITHUB_OUTPUT"
-
-          if [ "$DISPATCH_TRIAGE" = true ]; then
-            jq -n --argjson number "$NUMBER" '{event_type:"agentic-triage",client_payload:{issue_number:$number}}' \
-              | gh api --method POST "repos/$GITHUB_REPOSITORY/dispatches" --input -
-          fi
+          if [ "$DISPATCH_TRIAGE" = true ]; then jq -n --argjson number "$NUMBER" '{event_type:"agentic-triage",client_payload:{issue_number:$number}}' | gh api --method POST "repos/$GITHUB_REPOSITORY/dispatches" --input -; fi
