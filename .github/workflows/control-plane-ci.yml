@@ -128,6 +128,31 @@ jobs:
             exit 1
           fi
 
+      - name: Assert feature issues cannot enter reproduction
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROUTER=.github/workflows/reusable-issue-router.yml
+          DISPATCH=.github/workflows/reusable-incident-dispatcher.yml
+          PRODUCT=.github/workflows/reusable-product-intake.yml
+
+          grep -q "kind:feature" "$ROUTER"
+          grep -q "kind:feature.*labels" "$DISPATCH" || grep -q "'kind:feature' in labels" "$DISPATCH"
+          grep -q "{'kind:bug', 'kind:incident'}" "$DISPATCH"
+
+          if grep -q '\*\*Auto-PR eligible:\*\* `True`' "$ROUTER"; then
+            echo '::error::Issue router must never grant repair eligibility.'
+            exit 1
+          fi
+
+          grep -q '^  contents: read$' "$PRODUCT"
+          if grep -EIn -- 'contents:[[:space:]]*write|git[[:space:]]+push|gh[[:space:]]+pr[[:space:]]+(create|merge)|kubectl[[:space:]]+apply|terraform[[:space:]]+apply|vercel[[:space:]].*--prod' "$PRODUCT"; then
+            echo '::error::Product intake workflow contains code-write, PR, merge, or deployment authority.'
+            exit 1
+          fi
+          grep -q 'openai/codex-action@[0-9a-f]\{40\}' "$PRODUCT"
+          grep -q "permission-profile: ':read-only'" "$PRODUCT"
+
       - name: Ensure caller templates demand an explicit central ref
         run: |
           set -euo pipefail
