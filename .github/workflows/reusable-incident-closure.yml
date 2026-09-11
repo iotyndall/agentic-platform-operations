@@ -1,0 +1,78 @@
+name: Reusable incident closure gate
+
+on:
+  workflow_call:
+    inputs:
+      incident_issue:
+        required: true
+        type: string
+      remediation_pr:
+        required: true
+        type: string
+      learning_pr:
+        required: true
+        type: string
+      close_when_ready:
+        required: false
+        type: boolean
+        default: true
+    outputs:
+      closure_ready:
+        value: ${{ jobs.close.outputs.closure_ready }}
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: write
+
+jobs:
+  close:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      closure_ready: ${{ steps.verify.outputs.closure_ready }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      INCIDENT_ISSUE: ${{ inputs.incident_issue }}
+      REMEDIATION_PR: ${{ inputs.remediation_pr }}
+      LEARNING_PR: ${{ inputs.learning_pr }}
+      CLOSE_WHEN_READY: ${{ inputs.close_when_ready }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+
+      - name: Require merged remediation, merged learning record, and durable guardrail improvement
+        id: verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh issue view "$INCIDENT_ISSUE" --json number,state,labels,body,url > "$RUNNER_TEMP/incident.json"
+          jq -e '[.labels[].name] | index("kind:incident") != null' "$RUNNER_TEMP/incident.json" >/dev/null || { echo '::error::Not a canonical incident'; exit 1; }
+
+          gh pr view "$REMEDIATION_PR" --json number,mergedAt,files,url > "$RUNNER_TEMP/remediation.json"
+          gh pr view "$LEARNING_PR" --json number,mergedAt,files,url > "$RUNNER_TEMP/learning.json"
+          jq -e '.mergedAt != null' "$RUNNER_TEMP/remediation.json" >/dev/null || { echo '::error::Remediation PR is not merged'; exit 1; }
+          jq -e '.mergedAt != null' "$RUNNER_TEMP/learning.json" >/dev/null || { echo '::error::Learning PR is not merged'; exit 1; }
+
+          jq -e 'all(.files[].path; startswith(".agentic/lessons/") or startswith("docs/incidents/"))' "$RUNNER_TEMP/learning.json" >/dev/null || {
+            echo '::error::Learning PR modified non-learning paths.'; exit 1
+          }
+
+          # A material incident may not close with documentation alone. The remediation must add or modify a durable guardrail.
+          jq -e 'any(.files[].path;
+            test("(^|/)(test|tests|__tests__|spec|specs|e2e|playwright|smoke|synthetic|monitor|runbook|runbooks|adr|architecture)(/|\\.|$)"; "i") or
+            startswith(".github/workflows/") or
+            startswith("scripts/")
+          )' "$RUNNER_TEMP/remediation.json" >/dev/null || {
+            echo '::error::Incident closure requires a durable test/monitor/runbook/workflow/architecture improvement in the remediation.'
+            exit 1
+          }
+
+          echo 'closure_ready=true' >> "$GITHUB_OUTPUT"
+          if [ "$CLOSE_WHEN_READY" = true ]; then
+            gh label create 'incident:resolved' --color 0e8a16 --description 'Incident closure requirements satisfied' --force >/dev/null 2>&1 || true
+            gh issue edit "$INCIDENT_ISSUE" --add-label incident:resolved
+            gh issue comment "$INCIDENT_ISSUE" --body "Closure gate passed: remediation #$REMEDIATION_PR and learning #$LEARNING_PR are merged, and a durable guardrail improvement is present."
+            gh issue close "$INCIDENT_ISSUE" --reason completed
+          fi
