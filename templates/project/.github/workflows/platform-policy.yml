@@ -1,0 +1,13 @@
+name: Platform policy
+
+on:
+  pull_request:
+  merge_group:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  policy:
+    uses: iotyndall/agentic-platform-operations/.github/workflows/reusable-policy.yml@PINNED_REF
