@@ -1,0 +1,93 @@
+name: Control-plane CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: control-plane-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Parse JSON assets
+        run: |
+          set -euo pipefail
+          python -m json.tool schemas/platform-ops.schema.json >/dev/null
+          python -m json.tool templates/project/.agentic/platform-ops.json >/dev/null
+          for f in examples/*.platform-ops.json; do
+            python -m json.tool "$f" >/dev/null
+          done
+
+      - name: Validate project-contract safety invariants
+        run: |
+          python scripts/validate_contract.py \
+            templates/project/.agentic/platform-ops.json \
+            examples/*.platform-ops.json
+
+      - name: Negative-test contract guardrails
+        run: |
+          set -euo pipefail
+          cp templates/project/.agentic/platform-ops.json /tmp/unsafe.json
+          python - <<'PY'
+          import json
+          p='/tmp/unsafe.json'
+          d=json.load(open(p))
+          d['risk']['escalationDomains'].remove('secrets')
+          json.dump(d, open(p,'w'))
+          PY
+          if python scripts/validate_contract.py /tmp/unsafe.json; then
+            echo '::error::Validator allowed removal of a default RED escalation domain.'
+            exit 1
+          fi
+
+          cp templates/project/.agentic/platform-ops.json /tmp/unsafe-repair.json
+          python - <<'PY'
+          import json
+          p='/tmp/unsafe-repair.json'
+          d=json.load(open(p))
+          d['repair']['enabled']=True
+          d['repair']['minimumConfidence']='high'
+          d['repair']['issueLabel']='auto-triage'
+          json.dump(d, open(p,'w'))
+          PY
+          if python scripts/validate_contract.py /tmp/unsafe-repair.json; then
+            echo '::error::Validator allowed repair below autonomy level 2.'
+            exit 1
+          fi
+
+      - name: Assert bounded-repair workflow stays PR-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE=.github/workflows/reusable-bounded-repair.yml
+          grep -q 'gh pr create' "$FILE"
+          grep -q "CENTRAL_PROTECTED='^(\\\\.github/|\\\\.agentic/|\\\\.env)'" "$FILE"
+
+          if grep -EIn -- 'gh pr merge|kubectl[[:space:]]+apply|terraform[[:space:]]+apply|vercel[[:space:]].*--prod|aws[[:space:]].*deploy' "$FILE"; then
+            echo '::error::Central bounded-repair workflow contains a direct merge/deploy command.'
+            exit 1
+          fi
+
+      - name: Ensure caller templates demand an explicit central ref
+        run: |
+          set -euo pipefail
+          count=$(grep -RIl 'agentic-platform-operations/.github/workflows/' templates/project/.github/workflows | wc -l | tr -d ' ')
+          pinned=$(grep -RIl '@PINNED_REF' templates/project/.github/workflows | wc -l | tr -d ' ')
+          test "$count" -eq "$pinned" || {
+            echo "::error::$count central workflow callers exist but only $pinned require PINNED_REF"
+            exit 1
+          }
