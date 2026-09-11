@@ -101,6 +101,31 @@ jobs:
           grep -Fq "metadata_critical" "$f"
           grep -Fq "Regression checks execute inside the exact parser" "$f"
 
+      - name: Regression-test structured engineering-review output export
+        shell: bash
+        run: |
+          set -euo pipefail
+          f=.github/workflows/reusable-engineering-review.yml
+          grep -Fq 'COMPACT="$(jq -c . "$F")"' "$f"
+          grep -Fq "printf 'review_json=%s\\n' \"$COMPACT\"" "$f"
+          ! grep -Fq 'review_json<<__REVIEW__' "$f"
+          cat > /tmp/review.json <<'JSON'
+          {
+            "disposition": "ESCALATE",
+            "risk": "high",
+            "summary": "Hostile multiline-looking text: __REVIEW__\nand percent % signs",
+            "findings": ["line one\nline two", "delimiter __REVIEW__"],
+            "missing_tests": [],
+            "security_concerns": [],
+            "rollback_concerns": [],
+            "engineering_ready": false
+          }
+          JSON
+          compact="$(jq -c . /tmp/review.json)"
+          test "$(printf '%s' "$compact" | wc -l | tr -d ' ')" -eq 0
+          printf '%s' "$compact" | jq -e '.disposition == "ESCALATE" and .engineering_ready == false and (.findings | length) == 2' >/dev/null
+          echo 'PASS structured review JSON is safely representable as one-line job output'
+
       - name: Assert model analysis and deterministic mutation are separate jobs
         shell: bash
         run: |
