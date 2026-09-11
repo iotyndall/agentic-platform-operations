@@ -1,0 +1,18 @@
+name: Platform repair dispatch
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: platform-repair-dispatch
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    uses: iotyndall/agentic-platform-operations/.github/workflows/reusable-repair-dispatcher.yml@PINNED_REF
