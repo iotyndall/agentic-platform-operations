@@ -17,11 +17,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      # actions/checkout v5, pinned to immutable commit.
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      # actions/setup-python v6, pinned to immutable commit.
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.12'
 
@@ -44,59 +42,30 @@ jobs:
           cp templates/project/.agentic/platform-ops.json /tmp/unsafe.json
           python - <<'PY'
           import json
-          p='/tmp/unsafe.json'
-          d=json.load(open(p))
-          d['risk']['escalationDomains'].remove('secrets')
-          json.dump(d, open(p,'w'))
+          p='/tmp/unsafe.json'; d=json.load(open(p)); d['risk']['escalationDomains'].remove('secrets'); json.dump(d, open(p,'w'))
           PY
-          if python scripts/validate_contract.py /tmp/unsafe.json; then
-            echo '::error::Validator allowed removal of a default RED escalation domain.'
-            exit 1
-          fi
+          if python scripts/validate_contract.py /tmp/unsafe.json; then echo '::error::Validator allowed removal of a default RED escalation domain.'; exit 1; fi
 
           cp templates/project/.agentic/platform-ops.json /tmp/unsafe-production.json
           python - <<'PY'
           import json
-          p='/tmp/unsafe-production.json'
-          d=json.load(open(p))
-          d['environments']['production']['protected']=False
-          json.dump(d, open(p,'w'))
+          p='/tmp/unsafe-production.json'; d=json.load(open(p)); d['environments']['production']['protected']=False; json.dump(d, open(p,'w'))
           PY
-          if python scripts/validate_contract.py /tmp/unsafe-production.json; then
-            echo '::error::Validator allowed an unprotected production environment.'
-            exit 1
-          fi
+          if python scripts/validate_contract.py /tmp/unsafe-production.json; then echo '::error::Validator allowed an unprotected production environment.'; exit 1; fi
 
           cp templates/project/.agentic/platform-ops.json /tmp/unsafe-repair.json
           python - <<'PY'
           import json
-          p='/tmp/unsafe-repair.json'
-          d=json.load(open(p))
-          d['project']['autonomyLevel']=2
-          d['repair']['enabled']=True
-          d['repair']['reproductionRequired']=False
-          json.dump(d, open(p,'w'))
+          p='/tmp/unsafe-repair.json'; d=json.load(open(p)); d['project']['autonomyLevel']=2; d['repair']['enabled']=True; d['repair']['reproductionRequired']=False; json.dump(d, open(p,'w'))
           PY
-          if python scripts/validate_contract.py /tmp/unsafe-repair.json; then
-            echo '::error::Validator allowed autonomous repair without reproduction evidence.'
-            exit 1
-          fi
+          if python scripts/validate_contract.py /tmp/unsafe-repair.json; then echo '::error::Validator allowed autonomous repair without reproduction evidence.'; exit 1; fi
 
           cp templates/project/.agentic/platform-ops.json /tmp/unsafe-mitigation.json
           python - <<'PY'
           import json
-          p='/tmp/unsafe-mitigation.json'
-          d=json.load(open(p))
-          d['mitigations']=[{
-            'id':'unsafe-retry','type':'retry-idempotent-job','runbook':'runbooks/webhook-backlog.md',
-            'autonomousAllowed':True,'reversible':False,'validationCommand':''
-          }]
-          json.dump(d, open(p,'w'))
+          p='/tmp/unsafe-mitigation.json'; d=json.load(open(p)); d['mitigations']=[{'id':'unsafe-retry','type':'retry-idempotent-job','runbook':'runbooks/webhook-backlog.md','autonomousAllowed':True,'reversible':False,'validationCommand':''}]; json.dump(d, open(p,'w'))
           PY
-          if python scripts/validate_contract.py /tmp/unsafe-mitigation.json; then
-            echo '::error::Validator allowed an unsafe autonomous mitigation.'
-            exit 1
-          fi
+          if python scripts/validate_contract.py /tmp/unsafe-mitigation.json; then echo '::error::Validator allowed an unsafe autonomous mitigation.'; exit 1; fi
 
       - name: Assert third-party Actions are immutable
         shell: bash
@@ -105,12 +74,9 @@ jobs:
           bad=0
           while IFS= read -r line; do
             ref="$(printf '%s' "$line" | sed -E 's/^[[:space:]]*-[[:space:]]*uses:[[:space:]]*//; s/[[:space:]#].*$//')"
-            case "$ref" in
-              ./*) continue ;;
-            esac
+            case "$ref" in ./*) continue ;; esac
             if ! printf '%s' "$ref" | grep -Eq '@[0-9a-f]{40}$'; then
-              echo "::error::Unpinned action reference: $ref"
-              bad=1
+              echo "::error::Unpinned action reference: $ref"; bad=1
             fi
           done < <(grep -RhE '^[[:space:]]*-[[:space:]]*uses:' .github/workflows || true)
           test "$bad" -eq 0
@@ -122,36 +88,37 @@ jobs:
           FILE=.github/workflows/reusable-bounded-repair.yml
           grep -q 'gh pr create' "$FILE"
           grep -q "CENTRAL_PROTECTED='^(\\\\.github/|\\\\.agentic/|\\\\.env)'" "$FILE"
-
           if grep -EIn -- 'gh pr merge|kubectl[[:space:]]+apply|terraform[[:space:]]+apply|vercel[[:space:]].*--prod|aws[[:space:]].*deploy' "$FILE"; then
-            echo '::error::Central bounded-repair workflow contains a direct merge/deploy command.'
-            exit 1
+            echo '::error::Central bounded-repair workflow contains a direct merge/deploy command.'; exit 1
           fi
 
-      - name: Assert feature issues cannot enter reproduction
-        shell: bash
+      - name: Assert product routing safety invariants
         run: |
-          set -euo pipefail
-          ROUTER=.github/workflows/reusable-issue-router.yml
-          DISPATCH=.github/workflows/reusable-incident-dispatcher.yml
-          PRODUCT=.github/workflows/reusable-product-intake.yml
+          python - <<'PY'
+          from pathlib import Path
+          router = Path('.github/workflows/reusable-issue-router.yml').read_text()
+          dispatch = Path('.github/workflows/reusable-incident-dispatcher.yml').read_text()
+          product = Path('.github/workflows/reusable-product-intake.yml').read_text()
 
-          grep -q "kind:feature" "$ROUTER"
-          grep -q "kind:feature.*labels" "$DISPATCH" || grep -q "'kind:feature' in labels" "$DISPATCH"
-          grep -q "{'kind:bug', 'kind:incident'}" "$DISPATCH"
+          checks = {
+              'router defines feature kind': 'kind:feature' in router,
+              'router does not grant repair marker': '**Auto-PR eligible:** `True`' not in router,
+              'dispatcher explicitly excludes feature': "'kind:feature' in labels" in dispatch,
+              'dispatcher requires defect/incident kinds': "{'kind:bug', 'kind:incident'}" in dispatch,
+              'product source permission is read-only': '\n  contents: read\n' in product,
+              'product uses pinned Codex reviewer': 'openai/codex-action@86365089eb2b84e0a8fb0717b304f8bdcb13b20e' in product,
+              'Codex reviewer is filesystem read-only': "permission-profile: ':read-only'" in product,
+          }
+          forbidden = ['contents: write', 'git push', 'gh pr create', 'gh pr merge', 'kubectl apply', 'terraform apply', 'vercel --prod']
+          for term in forbidden:
+              checks[f'product forbids {term}'] = term not in product
 
-          if grep -q '\*\*Auto-PR eligible:\*\* `True`' "$ROUTER"; then
-            echo '::error::Issue router must never grant repair eligibility.'
-            exit 1
-          fi
-
-          grep -q '^  contents: read$' "$PRODUCT"
-          if grep -EIn -- 'contents:[[:space:]]*write|git[[:space:]]+push|gh[[:space:]]+pr[[:space:]]+(create|merge)|kubectl[[:space:]]+apply|terraform[[:space:]]+apply|vercel[[:space:]].*--prod' "$PRODUCT"; then
-            echo '::error::Product intake workflow contains code-write, PR, merge, or deployment authority.'
-            exit 1
-          fi
-          grep -q 'openai/codex-action@[0-9a-f]\{40\}' "$PRODUCT"
-          grep -q "permission-profile: ':read-only'" "$PRODUCT"
+          failed = [name for name, ok in checks.items() if not ok]
+          if failed:
+              for name in failed: print(f'::error::{name}')
+              raise SystemExit(1)
+          for name in checks: print(f'PASS {name}')
+          PY
 
       - name: Ensure caller templates demand an explicit central ref
         run: |
@@ -159,6 +126,5 @@ jobs:
           count=$(grep -RIl 'agentic-platform-operations/.github/workflows/' templates/project/.github/workflows | wc -l | tr -d ' ')
           pinned=$(grep -RIl '@PINNED_REF' templates/project/.github/workflows | wc -l | tr -d ' ')
           test "$count" -eq "$pinned" || {
-            echo "::error::$count central workflow callers exist but only $pinned require PINNED_REF"
-            exit 1
+            echo "::error::$count central workflow callers exist but only $pinned require PINNED_REF"; exit 1
           }
