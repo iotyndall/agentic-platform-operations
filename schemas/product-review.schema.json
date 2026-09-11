@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/iotyndall/agentic-platform-operations/schemas/product-review.schema.json",
+  "title": "Adversarial Product Review",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["disposition", "summary", "strongest_counterargument", "findings", "simplifications", "missing_acceptance_criteria", "required_revisions", "engineering_ready"],
+  "properties": {
+    "disposition": {"enum": ["PASS", "REVISE", "ESCALATE"]},
+    "summary": {"type": "string", "minLength": 1},
+    "strongest_counterargument": {"type": "string", "minLength": 1},
+    "findings": {"type": "array", "items": {"type": "string"}},
+    "simplifications": {"type": "array", "items": {"type": "string"}},
+    "missing_acceptance_criteria": {"type": "array", "items": {"type": "string"}},
+    "required_revisions": {"type": "array", "items": {"type": "string"}},
+    "engineering_ready": {"type": "boolean"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"disposition": {"const": "PASS"}}},
+      "then": {"properties": {"engineering_ready": {"const": true}}},
+      "else": {"properties": {"engineering_ready": {"const": false}}}
+    }
+  ]
+}
