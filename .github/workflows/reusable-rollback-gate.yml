@@ -1,0 +1,131 @@
+name: Reusable pre-authorized rollback gate
+
+on:
+  workflow_call:
+    inputs:
+      incident_issue:
+        required: true
+        type: string
+      current_sha:
+        required: true
+        type: string
+      prior_known_good_sha:
+        required: true
+        type: string
+      mitigation_id:
+        required: true
+        type: string
+      health_failure_count:
+        required: true
+        type: number
+      required_failure_count:
+        required: false
+        type: number
+        default: 3
+      schema_compatible:
+        required: true
+        type: boolean
+      max_rollback_commits:
+        required: false
+        type: number
+        default: 20
+      config_path:
+        required: false
+        type: string
+        default: '.agentic/platform-ops.json'
+    outputs:
+      authorized:
+        value: ${{ jobs.gate.outputs.authorized }}
+      rollback_evidence_json:
+        value: ${{ jobs.gate.outputs.rollback_evidence_json }}
+
+permissions:
+  contents: read
+  issues: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      authorized: ${{ steps.gate.outputs.authorized }}
+      rollback_evidence_json: ${{ steps.gate.outputs.rollback_evidence_json }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      INCIDENT_ISSUE: ${{ inputs.incident_issue }}
+      CURRENT_SHA: ${{ inputs.current_sha }}
+      PRIOR_SHA: ${{ inputs.prior_known_good_sha }}
+      MITIGATION_ID: ${{ inputs.mitigation_id }}
+      HEALTH_FAILURE_COUNT: ${{ inputs.health_failure_count }}
+      REQUIRED_FAILURE_COUNT: ${{ inputs.required_failure_count }}
+      SCHEMA_COMPATIBLE: ${{ inputs.schema_compatible }}
+      MAX_ROLLBACK_COMMITS: ${{ inputs.max_rollback_commits }}
+      CONFIG_PATH: ${{ inputs.config_path }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Authorize rollback only when the versioned local contract and incident evidence permit it
+        id: gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f "$CONFIG_PATH" || { echo "::error::Missing $CONFIG_PATH"; exit 1; }
+          python - <<'PY'
+          import os, re
+          for name in ('CURRENT_SHA','PRIOR_SHA'):
+              if not re.fullmatch(r'[0-9a-f]{40}', os.environ[name]): raise SystemExit(f'{name} must be a full SHA')
+          if os.environ['CURRENT_SHA'] == os.environ['PRIOR_SHA']: raise SystemExit('rollback target must differ from current SHA')
+          if int(float(os.environ['HEALTH_FAILURE_COUNT'])) < 0: raise SystemExit('invalid health failure count')
+          PY
+
+          jq -e --arg id "$MITIGATION_ID" '
+            any(.mitigations[]?;
+              .id == $id and .type == "rollback" and .autonomousAllowed == true and .reversible == true and (.runbook | length > 0) and (.validationCommand | length > 0)
+            )' "$CONFIG_PATH" >/dev/null || {
+              echo '::error::Rollback is not an explicitly declared, autonomous, reversible mitigation with validation.'
+              exit 1
+            }
+
+          if [ "$SCHEMA_COMPATIBLE" != true ]; then
+            echo '::error::Rollback blocked because schema compatibility has not been mechanically proven.'
+            exit 1
+          fi
+          if [ "$(printf '%.0f' "$HEALTH_FAILURE_COUNT")" -lt "$(printf '%.0f' "$REQUIRED_FAILURE_COUNT")" ]; then
+            echo '::error::Rollback health-failure threshold has not been met.'
+            exit 1
+          fi
+
+          git fetch --no-tags origin "$CURRENT_SHA" "$PRIOR_SHA" >/dev/null 2>&1
+          git merge-base --is-ancestor "$PRIOR_SHA" "$CURRENT_SHA" || {
+            echo '::error::Prior known-good SHA is not an ancestor of the current release.'
+            exit 1
+          }
+          DISTANCE="$(git rev-list --count "$PRIOR_SHA..$CURRENT_SHA")"
+          test "$DISTANCE" -ge 1 && test "$DISTANCE" -le "$(printf '%.0f' "$MAX_ROLLBACK_COMMITS")" || {
+            echo "::error::Rollback distance $DISTANCE exceeds configured safety bound."
+            exit 1
+          }
+
+          gh issue view "$INCIDENT_ISSUE" --json number,state,body,labels,comments > "$RUNNER_TEMP/incident.json"
+          jq -e '.state == "OPEN" and ([.labels[].name] | index("kind:incident") != null)' "$RUNNER_TEMP/incident.json" >/dev/null || {
+            echo '::error::Rollback requires an open canonical incident.'
+            exit 1
+          }
+          jq -e --arg cur "$CURRENT_SHA" --arg prior "$PRIOR_SHA" '
+            ((.body // "") + "\n" + ([.comments[].body // ""] | join("\n"))) as $text |
+            ($text | contains($cur)) and ($text | contains($prior))
+          ' "$RUNNER_TEMP/incident.json" >/dev/null || {
+            echo '::error::Incident evidence does not bind both current and prior-known-good SHAs.'
+            exit 1
+          }
+
+          EVIDENCE="$(jq -nc \
+            --arg repo "$GITHUB_REPOSITORY" --argjson issue "$INCIDENT_ISSUE" --arg cur "$CURRENT_SHA" --arg prior "$PRIOR_SHA" \
+            --arg mitigation "$MITIGATION_ID" --argjson failures "$(printf '%.0f' "$HEALTH_FAILURE_COUNT")" \
+            --argjson compatible "$SCHEMA_COMPATIBLE" --argjson distance "$DISTANCE" \
+            '{version:1,repository:$repo,incident_issue:$issue,current_sha:$cur,prior_known_good_sha:$prior,mitigation_id:$mitigation,health_failure_count:$failures,schema_compatible:$compatible,ancestor_distance:$distance,authorized:true,reasons:["declared reversible rollback","failure threshold met","schema compatible","known-good ancestor within distance bound","incident binds release SHAs"]}')"
+          echo 'authorized=true' >> "$GITHUB_OUTPUT"
+          echo "rollback_evidence_json=$EVIDENCE" >> "$GITHUB_OUTPUT"
