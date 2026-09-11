@@ -1,0 +1,32 @@
+name: Platform PR Gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  policy:
+    if: github.event.pull_request.draft == false
+    uses: iotyndall/agentic-platform-operations/.github/workflows/reusable-policy.yml@PINNED_REF
+
+  ci:
+    if: github.event.pull_request.draft == false
+    uses: iotyndall/agentic-platform-operations/.github/workflows/reusable-node-ci.yml@PINNED_REF
+
+  security:
+    if: github.event.pull_request.draft == false
+    uses: iotyndall/agentic-platform-operations/.github/workflows/reusable-security.yml@PINNED_REF
+
+  independent-review:
+    if: github.event.pull_request.draft == false
+    needs: [policy, ci, security]
+    uses: iotyndall/agentic-platform-operations/.github/workflows/reusable-engineering-review.yml@PINNED_REF
+    with:
+      pull_request_number: ${{ github.event.pull_request.number }}
+      expected_head_sha: ${{ github.event.pull_request.head.sha }}
+      declared_risk: ${{ needs.policy.outputs.risk }}
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
