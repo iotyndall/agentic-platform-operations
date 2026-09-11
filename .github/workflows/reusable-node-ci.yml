@@ -1,0 +1,140 @@
+name: Reusable deterministic Node CI
+
+on:
+  workflow_call:
+    inputs:
+      config_path:
+        description: 'Project-local operations contract'
+        required: false
+        type: string
+        default: '.agentic/platform-ops.json'
+      timeout_minutes:
+        description: 'Verification job timeout'
+        required: false
+        type: number
+        default: 20
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      node_version: ${{ steps.read.outputs.node_version }}
+      package_manager: ${{ steps.read.outputs.package_manager }}
+      install: ${{ steps.read.outputs.install }}
+      typecheck: ${{ steps.read.outputs.typecheck }}
+      test: ${{ steps.read.outputs.test }}
+      lint: ${{ steps.read.outputs.lint }}
+      build: ${{ steps.read.outputs.build }}
+      migration_check: ${{ steps.read.outputs.migration_check }}
+      integration: ${{ steps.read.outputs.integration }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: false
+
+      - name: Validate and read project contract
+        id: read
+        shell: bash
+        env:
+          CONFIG_PATH: ${{ inputs.config_path }}
+        run: |
+          set -euo pipefail
+          test -f "$CONFIG_PATH" || { echo "::error::Missing $CONFIG_PATH"; exit 1; }
+          jq -e '.version == 1' "$CONFIG_PATH" >/dev/null
+          jq -e --arg repo "$GITHUB_REPOSITORY" '.project.repository == $repo' "$CONFIG_PATH" >/dev/null || {
+            echo "::error::project.repository must equal $GITHUB_REPOSITORY"
+            exit 1
+          }
+          jq -e '.commands.install | type == "string" and length > 0' "$CONFIG_PATH" >/dev/null
+          jq -e '.commands.build | type == "string" and length > 0' "$CONFIG_PATH" >/dev/null
+
+          emit() {
+            local key="$1" jq_expr="$2" value
+            value="$(jq -r "$jq_expr // \"\"" "$CONFIG_PATH")"
+            if printf '%s' "$value" | grep -q $'\n'; then
+              echo "::error::Contract command $key must be a single line"
+              exit 1
+            fi
+            printf '%s=%s\n' "$key" "$value" >> "$GITHUB_OUTPUT"
+          }
+
+          emit node_version '.runtime.nodeVersion'
+          emit package_manager '.runtime.packageManager'
+          emit install '.commands.install'
+          emit typecheck '.commands.typecheck'
+          emit test '.commands.test'
+          emit lint '.commands.lint'
+          emit build '.commands.build'
+          emit migration_check '.commands.migrationCheck'
+          emit integration '.commands.integration'
+
+  verify:
+    needs: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: false
+
+      - uses: pnpm/action-setup@v4
+        if: needs.contract.outputs.package_manager == 'pnpm'
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v5
+        if: needs.contract.outputs.node_version != ''
+        with:
+          node-version: ${{ needs.contract.outputs.node_version }}
+
+      - name: Install
+        shell: bash
+        env:
+          COMMAND: ${{ needs.contract.outputs.install }}
+        run: bash -euo pipefail -c "$COMMAND"
+
+      - name: Type check
+        if: needs.contract.outputs.typecheck != ''
+        shell: bash
+        env:
+          COMMAND: ${{ needs.contract.outputs.typecheck }}
+        run: bash -euo pipefail -c "$COMMAND"
+
+      - name: Tests
+        if: needs.contract.outputs.test != ''
+        shell: bash
+        env:
+          COMMAND: ${{ needs.contract.outputs.test }}
+        run: bash -euo pipefail -c "$COMMAND"
+
+      - name: Lint
+        if: needs.contract.outputs.lint != ''
+        shell: bash
+        env:
+          COMMAND: ${{ needs.contract.outputs.lint }}
+        run: bash -euo pipefail -c "$COMMAND"
+
+      - name: Build
+        shell: bash
+        env:
+          COMMAND: ${{ needs.contract.outputs.build }}
+          NEXT_TELEMETRY_DISABLED: '1'
+        run: bash -euo pipefail -c "$COMMAND"
+
+      - name: Migration/schema check
+        if: needs.contract.outputs.migration_check != ''
+        shell: bash
+        env:
+          COMMAND: ${{ needs.contract.outputs.migration_check }}
+        run: bash -euo pipefail -c "$COMMAND"
+
+      - name: Integration checks
+        if: needs.contract.outputs.integration != ''
+        shell: bash
+        env:
+          COMMAND: ${{ needs.contract.outputs.integration }}
+        run: bash -euo pipefail -c "$COMMAND"
