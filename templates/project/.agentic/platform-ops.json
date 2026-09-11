@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "project": {
+    "name": "REPLACE_ME",
+    "repository": "OWNER/REPOSITORY",
+    "defaultBranch": "main",
+    "autonomyLevel": 1
+  },
+  "runtime": {
+    "kind": "node",
+    "nodeVersion": "22",
+    "packageManager": "pnpm"
+  },
+  "commands": {
+    "install": "pnpm install --frozen-lockfile",
+    "typecheck": "pnpm type-check",
+    "test": "pnpm test",
+    "lint": "pnpm lint",
+    "build": "pnpm build",
+    "migrationCheck": "",
+    "integration": "",
+    "productionVerify": ""
+  },
+  "risk": {
+    "protectedPathRegex": "^(\\.github/|\\.env|.*(?:^|/)(auth|secret|credential)(?:/|\\.))",
+    "maxAutonomousProductionLines": 60,
+    "maxRepairAttempts": 2,
+    "escalationDomains": [
+      "authentication",
+      "authorization",
+      "secrets",
+      "destructive-data",
+      "irreversible-migrations",
+      "payments"
+    ]
+  },
+  "security": {
+    "dependencyAuditCommand": "pnpm audit --prod --json",
+    "criticalAdvisoryAllowlist": []
+  },
+  "infrastructure": {
+    "deploymentProvider": "",
+    "database": "",
+    "observability": [],
+    "externalSystems": []
+  },
+  "production": {
+    "criticalJourneys": [
+      {
+        "id": "primary-user-outcome",
+        "description": "Replace with the business outcome that must remain healthy after deployment.",
+        "owner": "local",
+        "command": "",
+        "severityOnFailure": "P1"
+      }
+    ]
+  },
+  "repair": {
+    "enabled": false,
+    "minimumConfidence": "high",
+    "issueLabel": "auto-triage",
+    "provenanceRegex": ""
+  }
+}
