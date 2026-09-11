@@ -33,7 +33,7 @@ jobs:
         with:
           submodules: false
 
-      - name: Select at most one eligible incident
+      - name: Select at most one eligible incident or bug
         id: select
         shell: bash
         run: |
@@ -59,6 +59,13 @@ jobs:
           for issue in issues:
               labels = {x.get('name') for x in issue.get('labels', [])}
               body = issue.get('body') or ''
+              # A feature is never a reproduction candidate, even if another
+              # actor accidentally applied the repair label.
+              if 'kind:feature' in labels:
+                  continue
+              # Test-first reproduction is reserved for defects/incidents.
+              if not ({'kind:bug', 'kind:incident'} & labels):
+                  continue
               if dispatched_label in labels:
                   continue
               if '**Auto-PR eligible:** `True`' not in body:
@@ -74,7 +81,7 @@ jobs:
 
           NUMBER="$(jq -r '.number // empty' "$RUNNER_TEMP/selected.json")"
           if [ -z "$NUMBER" ]; then
-            echo 'No undispatched high-confidence incident eligible for reproduction.'
+            echo 'No undispatched high-confidence incident/bug eligible for reproduction.'
             echo 'found=false' >> "$GITHUB_OUTPUT"
             exit 0
           fi
