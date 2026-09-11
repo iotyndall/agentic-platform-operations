@@ -1,41 +1,67 @@
 # Agentic Platform Operations
 
-Central control plane for autonomous software engineering across current and future projects.
+Central GitHub-centered control plane for autonomous software engineering, reliability, and maintenance across current and future projects.
 
 The operating model is **shared engine + local contract**:
 
-- this repository owns the reusable playbook, CI/security/repair workflows, agent policies, schemas, and project templates;
-- each application repository keeps only a small `.agentic/platform-ops.json` describing its unique commands, infrastructure, protected paths, critical user journeys, and health checks;
-- application-specific production monitors remain close to the application when they depend on domain behavior, but they follow the common incident/repair/review lifecycle defined here.
+- this repository owns reusable policy, CI/security/reproduction/repair machinery, role definitions, runbooks, schemas, SLO defaults, and project templates;
+- each application repository keeps a small `.agentic/platform-ops.json` describing only its unique commands, infrastructure, protected paths, evidence sources, environments, critical user journeys, SLOs, approved mitigations, and release constraints;
+- application-specific runtime monitors stay close to the application when domain behavior cannot be generalized, but they feed the common incident/evidence/reproduction/repair/review/release/learning lifecycle here.
 
-## Goals
+## Mission
 
-1. Avoid copying hundreds of lines of workflow and agent-control logic into every repository.
-2. Make deterministic checks authoritative; agents may propose changes but may not waive failed gates.
-3. Keep production observation, code repair, independent review, promotion, and recovery as separate safety domains.
-4. Let every project define its own critical-path invariants without reinventing the operating model.
-5. Make new-project onboarding a small configuration exercise instead of a bespoke CI/CD build.
+Build bounded self-healing engineering operations:
+
+`detect → collect evidence → classify → safely mitigate → reproduce → repair → validate → review → release → verify → learn`
+
+The platform is intentionally **not** an all-powerful autonomous engineer. Agents may create evidence and proposals broadly; production actions are allowed only through pre-authorized, reversible, mechanically verified runbooks and protected release paths.
+
+## Core safety rules
+
+1. Customer safety and data integrity outrank autonomous speed.
+2. GitHub is the engineering control plane, not the sole source of runtime truth.
+3. Code repair requires executable reproduction evidence: baseline green, failing before repair, passing after repair.
+4. Deterministic gates are authoritative and cannot be waived by model output.
+5. An agent that authors a patch cannot approve, merge, or deploy it.
+6. Autonomous production mitigation must be explicitly declared, reversible, observable, and backed by a versioned runbook.
+7. Every material incident must create a durable improvement or an explicitly owned reliability item.
 
 ## Repository map
 
-- `docs/PLAYBOOK.md` — canonical engineering and recovery playbook.
+- `.github/agent-policy.md` — non-negotiable autonomy and separation-of-duties policy.
+- `agents/` — narrow Triage, Reproduction, Repair, Review, Release, Learning, and Security role contracts.
+- `docs/PLAYBOOK.md` — canonical engineering/recovery playbook.
 - `docs/ARCHITECTURE.md` — shared-engine/local-contract design.
 - `docs/ONBOARDING.md` — how to connect a project.
-- `schemas/platform-ops.schema.json` — project contract.
-- `examples/` — Mesa Direct and YALLOHA contracts.
-- `.github/workflows/reusable-node-ci.yml` — reusable deterministic Node/Next.js verification.
-- `.github/workflows/reusable-security.yml` — reusable dependency/security ratchet.
-- `.github/workflows/reusable-bounded-repair.yml` — reusable PR-only repair lane.
-- `templates/project/` — thin caller files for application repositories.
+- `docs/IMPLEMENTATION_STATUS.md` — explicit MVP gap/status ledger.
+- `schemas/platform-ops.schema.json` — local project contract.
+- `schemas/incident.schema.json` — structured incident record.
+- `schemas/evidence.schema.json` — redacted immutable evidence-bundle metadata.
+- `schemas/lesson.schema.json` — machine-readable verified incident lesson.
+- `runbooks/` — versioned pre-authorized mitigation/recovery policies.
+- `slo/defaults.yaml` — conservative SLO and error-budget defaults.
+- `incident-library/` — curated post-incident operational memory.
+- `examples/` — Mesa Direct and YALLOHA project contracts.
+- `.github/workflows/reusable-policy.yml` — deterministic changed-file risk classification.
+- `.github/workflows/reusable-node-ci.yml` — reusable deterministic CI.
+- `.github/workflows/reusable-security.yml` — dependency/security ratchet.
+- `.github/workflows/reusable-incident-dispatcher.yml` — eligible incident → reproduction queue.
+- `.github/workflows/reusable-reproduction.yml` — test-only failing reproduction stage.
+- `.github/workflows/reusable-bounded-repair.yml` — immutable-reproduction-backed PR-only repair stage.
+- `templates/project/` — thin caller workflows and starter local contract.
 
-## Autonomy boundary
+## Current autonomy boundary
 
-The intended progression is:
+Implemented centrally:
 
-`detect → diagnose → issue → bounded repair → deterministic verification → independent review → controlled merge → deployment → production verification → rollback/escalation`
+`incident eligible → reproduction branch → failing executable evidence → bounded repair → deterministic verification → repair PR`
 
-A project may adopt only the stages it is ready for. Sensitive changes—authentication, authorization/RLS, secrets, destructive data/schema operations, payment controls, broad architecture changes—remain escalation-only unless a project explicitly defines stronger controls.
+Not yet enabled centrally:
 
-## Versioning
+`independent cross-model review → staging release → protected production release → automated rollback/feature-flag mitigation → SLO error-budget gate → learning-agent PR`
 
-Caller repositories should pin reusable workflows to a reviewed release/tag or immutable commit SHA. `@main` is acceptable only during bootstrap; production projects should migrate to a versioned ref once the first release is cut.
+Those missing stages are tracked explicitly in `docs/IMPLEMENTATION_STATUS.md`. Repair remains PR-only until they exist and are proven.
+
+## Versioning and supply chain
+
+Central workflow changes have cross-project blast radius. Third-party Actions used here are pinned to immutable commit SHAs. Connected product repositories should pin reusable workflows to a reviewed release tag or, preferably for high assurance, an immutable central commit SHA. Never point production projects at a moving central `main` reference.
