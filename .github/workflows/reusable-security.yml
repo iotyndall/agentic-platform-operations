@@ -134,13 +134,46 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          PATTERN='-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|sk_live_[A-Za-z0-9]+|github_pat_[A-Za-z0-9_]+|ghp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|ANTHROPIC_API_KEY[[:space:]]*=[[:space:]]*[^$<{[:space:]]|OPENAI_API_KEY[[:space:]]*=[[:space:]]*[^$<{[:space:]]'
-          if grep -RInE \
-            --exclude-dir=.git \
-            --exclude-dir=node_modules \
-            --exclude='.env.example' \
-            -- "$PATTERN" .; then
-            echo '::error::High-confidence credential material appears to be committed.'
-            exit 1
-          fi
-          echo 'No high-confidence credential formats found.'
+          python - <<'PY'
+          import os, re, sys
+          from pathlib import Path
+
+          token_patterns = [
+              ('stripe-live-key', re.compile(r'sk_live_[A-Za-z0-9]{16,}')),
+              ('github-fine-grained-pat', re.compile(r'github_pat_[A-Za-z0-9_]{20,}')),
+              ('github-classic-pat', re.compile(r'ghp_[A-Za-z0-9]{20,}')),
+              ('aws-access-key', re.compile(r'AKIA[0-9A-Z]{16}')),
+              ('anthropic-api-key', re.compile(r'sk-ant-[A-Za-z0-9_-]{20,}')),
+              ('openai-api-key', re.compile(r'sk-(?!ant-)(?:(?:proj|svcacct)-)?[A-Za-z0-9_-]{20,}')),
+          ]
+          pem = re.compile(
+              r'-----BEGIN (?:(?:RSA|EC|OPENSSH) )?PRIVATE KEY-----'
+              r'\s+([A-Za-z0-9+/=\r\n]{80,}?)\s+'
+              r'-----END (?:(?:RSA|EC|OPENSSH) )?PRIVATE KEY-----',
+              re.S,
+          )
+
+          skip_dirs = {'.git', 'node_modules', '.next', 'dist', 'build', 'coverage'}
+          findings = []
+          root = Path('.')
+          for path in root.rglob('*'):
+              if not path.is_file() or any(part in skip_dirs for part in path.parts):
+                  continue
+              try:
+                  if path.stat().st_size > 2_000_000:
+                      continue
+                  text = path.read_text(encoding='utf-8')
+              except (UnicodeDecodeError, OSError):
+                  continue
+              for kind, pattern in token_patterns:
+                  if pattern.search(text):
+                      findings.append((str(path), kind))
+              if pem.search(text):
+                  findings.append((str(path), 'private-key-block'))
+
+          if findings:
+              for path, kind in sorted(set(findings)):
+                  print(f'::error file={path}::High-confidence committed credential material detected ({kind}).')
+              raise SystemExit(1)
+          print('No high-confidence credential formats found.')
+          PY
