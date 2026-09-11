@@ -40,50 +40,60 @@ jobs:
         run: |
           set -euo pipefail
           python - <<'PY' >> "$GITHUB_OUTPUT"
-          import datetime as dt, hashlib, json, math, os
+          import datetime as dt, hashlib, json, os
+          from decimal import Decimal, InvalidOperation
 
-          d = json.loads(os.environ['SLO_INPUT_JSON'])
+          d = json.loads(os.environ['SLO_INPUT_JSON'], parse_float=Decimal)
           env = d.get('environment')
           if env not in {'staging','production'}:
               raise SystemExit('environment must be staging or production')
           objs = d.get('objectives')
           if not isinstance(objs, list) or not objs:
               raise SystemExit('at least one SLO objective is required')
-          caution = float(os.environ['CAUTION_RATIO'])
-          if not (0 < caution < 1):
+          try:
+              caution = Decimal(str(os.environ['CAUTION_RATIO']))
+          except InvalidOperation:
+              raise SystemExit('invalid caution_ratio')
+          if not (Decimal('0') < caution < Decimal('1')):
               raise SystemExit('caution_ratio must be between 0 and 1')
 
           out = []
           states = []
           for obj in objs:
               oid = str(obj.get('id','')).strip()
-              target = float(obj.get('target'))
-              good = int(obj.get('good_events'))
-              total = int(obj.get('total_events'))
-              if not oid or not (0 < target <= 1) or good < 0 or total < 0 or good > total:
+              try:
+                  target = Decimal(str(obj.get('target')))
+                  good = int(obj.get('good_events'))
+                  total = int(obj.get('total_events'))
+              except (InvalidOperation, TypeError, ValueError):
                   raise SystemExit(f'invalid SLO objective: {obj}')
+              if not oid or not (Decimal('0') < target <= Decimal('1')) or good < 0 or total < 0 or good > total:
+                  raise SystemExit(f'invalid SLO objective: {obj}')
+
               if total == 0:
                   ratio, state = None, 'unknown'
               else:
-                  bad = total - good
-                  allowed_bad = (1.0 - target) * total
+                  bad = Decimal(total - good)
+                  allowed_bad = (Decimal('1') - target) * Decimal(total)
                   if allowed_bad <= 0:
-                      ratio = 0.0 if bad == 0 else float('inf')
+                      ratio = Decimal('0') if bad == 0 else None
+                      state = 'healthy' if bad == 0 else 'exhausted'
                   else:
                       ratio = bad / allowed_bad
-                  if math.isinf(ratio) or ratio >= 1.0:
-                      state = 'exhausted'
-                  elif ratio >= caution:
-                      state = 'caution'
-                  else:
-                      state = 'healthy'
+                      if ratio >= Decimal('1'):
+                          state = 'exhausted'
+                      elif ratio >= caution:
+                          state = 'caution'
+                      else:
+                          state = 'healthy'
+
               states.append(state)
               out.append({
                   'id': oid,
-                  'target': target,
+                  'target': float(target),
                   'good_events': good,
                   'total_events': total,
-                  'budget_consumed_ratio': None if ratio is None or math.isinf(ratio) else round(ratio, 6),
+                  'budget_consumed_ratio': None if ratio is None else float(ratio.quantize(Decimal('0.000001'))),
                   'status': state,
                   'source': str(obj.get('source',''))
               })
