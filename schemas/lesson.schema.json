@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agentic Platform Operations Lesson",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["incidentId", "service", "failureMode", "rootCauseStatus", "observations", "preventiveControls", "confidence"],
+  "properties": {
+    "incidentId": {"type": "string", "pattern": "^INC-"},
+    "service": {"type": "string", "minLength": 1},
+    "failureMode": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
+    "symptoms": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "observations": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+    "hypotheses": {"type": "array", "items": {"type": "string"}},
+    "rootCauseStatus": {"enum": ["verified", "probable", "unknown"]},
+    "rootCause": {"type": "string"},
+    "preventiveControls": {"type": "array", "minItems": 1, "items": {"type": "string"}, "uniqueItems": true},
+    "safeMitigation": {"type": "string"},
+    "requiredHumanApproval": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "relatedRunbooks": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "relatedPullRequests": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "relatedTests": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "monitorChanges": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "confidence": {"enum": ["low", "medium", "high"]},
+    "verifiedAt": {"type": "string", "format": "date-time"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"rootCauseStatus": {"const": "verified"}}},
+      "then": {"required": ["rootCause", "verifiedAt"]}
+    }
+  ]
+}
