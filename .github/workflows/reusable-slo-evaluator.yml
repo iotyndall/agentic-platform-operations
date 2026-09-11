@@ -1,0 +1,113 @@
+name: Reusable SLO and error-budget evaluator
+
+on:
+  workflow_call:
+    inputs:
+      slo_input_json:
+        description: 'Redacted aggregate counters only: {environment,objectives:[{id,target,good_events,total_events,source?}]}'
+        required: true
+        type: string
+      caution_ratio:
+        required: false
+        type: number
+        default: 0.5
+    outputs:
+      status:
+        value: ${{ jobs.evaluate.outputs.status }}
+      evidence_sha256:
+        value: ${{ jobs.evaluate.outputs.evidence_sha256 }}
+      state_json:
+        value: ${{ jobs.evaluate.outputs.state_json }}
+
+permissions:
+  contents: read
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      status: ${{ steps.eval.outputs.status }}
+      evidence_sha256: ${{ steps.eval.outputs.evidence_sha256 }}
+      state_json: ${{ steps.eval.outputs.state_json }}
+    env:
+      SLO_INPUT_JSON: ${{ inputs.slo_input_json }}
+      CAUTION_RATIO: ${{ inputs.caution_ratio }}
+    steps:
+      - name: Calculate objective and aggregate budget state
+        id: eval
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import datetime as dt, hashlib, json, math, os
+
+          d = json.loads(os.environ['SLO_INPUT_JSON'])
+          env = d.get('environment')
+          if env not in {'staging','production'}:
+              raise SystemExit('environment must be staging or production')
+          objs = d.get('objectives')
+          if not isinstance(objs, list) or not objs:
+              raise SystemExit('at least one SLO objective is required')
+          caution = float(os.environ['CAUTION_RATIO'])
+          if not (0 < caution < 1):
+              raise SystemExit('caution_ratio must be between 0 and 1')
+
+          out = []
+          states = []
+          for obj in objs:
+              oid = str(obj.get('id','')).strip()
+              target = float(obj.get('target'))
+              good = int(obj.get('good_events'))
+              total = int(obj.get('total_events'))
+              if not oid or not (0 < target <= 1) or good < 0 or total < 0 or good > total:
+                  raise SystemExit(f'invalid SLO objective: {obj}')
+              if total == 0:
+                  ratio, state = None, 'unknown'
+              else:
+                  bad = total - good
+                  allowed_bad = (1.0 - target) * total
+                  if allowed_bad <= 0:
+                      ratio = 0.0 if bad == 0 else float('inf')
+                  else:
+                      ratio = bad / allowed_bad
+                  if math.isinf(ratio) or ratio >= 1.0:
+                      state = 'exhausted'
+                  elif ratio >= caution:
+                      state = 'caution'
+                  else:
+                      state = 'healthy'
+              states.append(state)
+              out.append({
+                  'id': oid,
+                  'target': target,
+                  'good_events': good,
+                  'total_events': total,
+                  'budget_consumed_ratio': None if ratio is None or math.isinf(ratio) else round(ratio, 6),
+                  'status': state,
+                  'source': str(obj.get('source',''))
+              })
+
+          if 'exhausted' in states:
+              overall = 'exhausted'
+          elif 'unknown' in states:
+              overall = 'unknown'
+          elif 'caution' in states:
+              overall = 'caution'
+          else:
+              overall = 'healthy'
+
+          state = {
+              'version': 1,
+              'observed_at': dt.datetime.now(dt.timezone.utc).isoformat().replace('+00:00','Z'),
+              'environment': env,
+              'status': overall,
+              'objectives': out,
+              'notes': ['Aggregate counters only; no customer payloads retained.']
+          }
+          canonical = json.dumps(state, separators=(',', ':'), sort_keys=True)
+          digest = hashlib.sha256(canonical.encode()).hexdigest()
+          print(f'status={overall}')
+          print(f'evidence_sha256={digest}')
+          print(f'state_json={canonical}')
+          PY
