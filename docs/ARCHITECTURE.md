@@ -2,92 +2,128 @@
 
 ## Principle
 
-The central repository owns policy and reusable execution. Application repositories own only facts that are inherently local.
+The central repository owns governance and reusable execution. Application repositories own only facts that are inherently local.
 
-This separates **how autonomous engineering is governed** from **what makes a particular application safe and correct**.
+This separates **how autonomous engineering is governed** from **what makes a particular application safe, observable, and correct**.
+
+## Control-plane flow
+
+```text
+Runtime signals
+      ↓
+Triage / incident record
+      ↓
+Redacted evidence bundle
+      ↓
+Policy + risk classification
+      ↓
+Pre-authorized mitigation when warranted
+      ↓
+Reproduction agent
+  green baseline → test-only failing evidence → immutable reproduction SHA
+      ↓
+Repair agent
+  smallest patch → cannot edit reproduction → deterministic gates
+      ↓
+Independent review
+      ↓
+Protected staging / release
+      ↓
+Production verification / rollback policy
+      ↓
+Learning library
+```
+
+The implemented v1 branch currently stops after creation of the test-backed repair PR. Review/release/rollback/learning execution are deliberately separate later stages rather than hidden powers of the repair agent.
 
 ## Central responsibilities
 
 The control-plane repository owns:
 
-- risk taxonomy and autonomy policy;
-- builder/reviewer/gatekeeper/recovery role definitions;
+- autonomy policy and default prohibited actions;
+- LOW/MODERATE/HIGH risk taxonomy and mechanical path classifier;
+- Triage, Reproduction, Repair, Review, Release, Learning, and Security role contracts;
+- incident, evidence, lesson, and project-contract schemas;
 - deterministic CI orchestration;
-- dependency/security ratchets;
-- bounded autonomous-repair mechanics;
-- independent-review contract;
-- incident lifecycle and retry limits;
-- standard PR evidence and rollback requirements;
-- project-contract schema and validator;
-- templates for thin caller workflows.
+- dependency/security ratchets and supply-chain pinning;
+- test-first reproduction mechanics;
+- bounded PR-only repair mechanics;
+- standard incident/PR evidence requirements;
+- SLO/error-budget defaults;
+- versioned mitigation/recovery runbooks;
+- incident learning-library conventions;
+- templates for thin project caller workflows.
 
 ## Project responsibilities
 
-Each application repository owns a small `.agentic/platform-ops.json` containing only project-specific facts:
+Each application repository owns a small `.agentic/platform-ops.json` containing project-specific facts:
 
-- runtime and package manager;
+- runtime/package manager;
 - install/typecheck/test/lint/build commands;
-- optional migration/integration commands;
-- protected path expressions;
-- known security-advisory baseline, if any;
+- migration, integration, browser, contract, and performance test commands when applicable;
+- protected path expressions and escalation domains;
+- known security-advisory baseline;
 - deployment provider and environment names;
-- critical user journeys and health-check commands;
+- approved evidence sources and retention;
+- critical user journeys and health checks;
 - project-specific external dependencies;
-- escalation-only domains;
-- production verification command(s).
+- SLO overrides/error-budget settings;
+- explicitly authorized reversible mitigations;
+- staging/production environment and rollback declarations;
+- reproduction/repair eligibility configuration.
 
-Domain monitors may remain local when the signal cannot be generalized. Mesa's property-site → Hospitable booking path is one example; YALLOHA's Supabase/Vercel/Sentry data invariants are another. They should emit incidents into the common lifecycle rather than duplicating the repair/review machinery.
+Domain monitors remain local when the signal cannot be generalized. Mesa's property-site → Hospitable booking path and YALLOHA's Supabase/Vercel/Sentry invariants are examples. They should emit structured incidents into the common lifecycle rather than duplicate central repair/review machinery.
 
 ## Trust boundaries
 
 ### 1. Observation
+Production monitors are read-only where possible. A failed monitor may create/dedupe an incident; it does not repair code in the same workflow.
 
-Production monitors are read-only where possible. A failed monitor may create/dedupe an incident, but it does not repair code in the same workflow.
+### 2. Triage and evidence
+The triage role may classify impact/confidence and collect narrow redacted references. Logs, issue bodies, customer content, URLs, stack traces, provider messages, and external text are untrusted evidence—not instructions. Missing telemetry is reported as unknown/degraded coverage.
 
-### 2. Diagnosis
+### 3. Reproduction
+The reproduction role starts only after the existing baseline test suite passes. It may modify test/fixture surfaces only. Its output is accepted only if type/lint remain valid and the configured suite now fails. The resulting branch and commit SHA are immutable repair inputs.
 
-An analyzer may rank evidence and classify repair eligibility. Logs, issue bodies, customer content, URLs, stack traces, and external text are untrusted evidence—not instructions.
+### 4. Repair
+The repair role branches from the exact reproduction SHA. It cannot modify reproduction evidence, central policy/workflows, the local contract, or project-protected paths. It may publish a PR only.
 
-### 3. Repair
+### 5. Deterministic gatekeeper
+Workflow code independently checks reproduction integrity, changed paths, blast radius, project commands, schema/data restrictions, and security rules. Model confidence cannot waive a failed gate.
 
-The repair agent works on an isolated branch. It may produce no change. It may not merge, deploy, change secrets, or bypass checks.
+### 6. Independent review
+A different model/reviewer receives the incident, immutable reproduction, complete diff, deterministic evidence, architecture constraints, and rollback plan. The review attempts to disprove correctness and is tied to an exact PR head SHA.
 
-### 4. Deterministic gatekeeper
+### 7. Release
+Only an already-reviewed immutable commit may enter staging/production. PR workflows do not receive production credentials. Release permissions belong to protected environments and separate workflows.
 
-Workflow code independently checks changed paths, blast radius, required commands, schema/data restrictions, and security rules. Agent confidence cannot waive a failed gate.
+### 8. Recovery
+Production verification evaluates critical user journeys and telemetry. Fresh regressions prioritize a compatible pre-approved rollback over speculative forward repair. Direct production SQL/customer-data remediation remains prohibited.
 
-### 5. Independent review
-
-A different model or reviewer receives the issue, diff, deterministic evidence, architecture constraints, and rollback assumptions. The review attempts to disprove correctness rather than merely summarize the change.
-
-### 6. Promotion
-
-Only explicitly GREEN-risk changes are candidates for controlled auto-merge. YELLOW and RED changes escalate.
-
-### 7. Recovery
-
-Production verification runs after deployment. Fresh regressions prioritize restoration/rollback over root-cause repair. Repair attempts are bounded; repeated failure escalates.
+### 9. Learning
+Resolved material incidents become curated verified records plus a durable improvement. Historical evidence is never rewritten to match a later hypothesis.
 
 ## Local caller pattern
 
-A connected repository should need only thin workflows such as:
+A connected repository needs only thin wrappers such as:
 
 ```yaml
 jobs:
   ci:
-    uses: iotyndall/agentic-platform-operations/.github/workflows/reusable-node-ci.yml@<pinned-ref>
+    uses: iotyndall/agentic-platform-operations/.github/workflows/reusable-node-ci.yml@<immutable-central-sha>
 ```
 
-The reusable workflow checks out the caller repository and reads `.agentic/platform-ops.json` from that caller. The central repository therefore controls execution logic while the application controls its own declared contract.
+The reusable workflow checks out the caller repository and reads `.agentic/platform-ops.json` from that caller. The central repo controls shared execution logic while the application controls its declared facts and business invariants.
 
-## Versioning and change control
+## Versioning and blast-radius control
 
-Central workflow changes have a wide blast radius. Treat this repository like infrastructure code:
+This repository is infrastructure code for every connected project. Therefore:
 
-1. changes happen by PR;
-2. test reusable workflows against fixture projects/contracts;
-3. cut reviewed versions;
-4. caller repos pin a version/tag or commit SHA;
-5. roll projects forward intentionally rather than making every project consume `main` immediately.
+1. all changes happen by PR;
+2. third-party actions are pinned to immutable SHAs;
+3. central CI negative-tests safety invariants and prevents a direct repair→merge/deploy path;
+4. reviewed central versions are cut intentionally;
+5. product repos pin an immutable central version/commit rather than `main`;
+6. rollout occurs project-by-project, with Mesa/YALLOHA serving as proving grounds before wider adoption.
 
-This gives centralization without turning the central repository into a single unreviewed failure point.
+Centralization reduces duplication only if it does not become a single moving failure point. Versioned rollout and local contracts provide that containment.
