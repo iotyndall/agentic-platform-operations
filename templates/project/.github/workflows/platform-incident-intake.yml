@@ -1,0 +1,20 @@
+name: Platform Incident Intake
+
+on:
+  repository_dispatch:
+    types: [agentic-incident]
+  workflow_dispatch:
+    inputs:
+      incident_json:
+        description: 'Structured redacted incident metadata JSON; never raw logs/customer payloads'
+        required: true
+        type: string
+
+jobs:
+  intake:
+    permissions:
+      contents: read
+      issues: write
+    uses: iotyndall/agentic-platform-operations/.github/workflows/reusable-incident-intake.yml@PINNED_REF
+    with:
+      incident_json: ${{ github.event_name == 'repository_dispatch' && toJSON(github.event.client_payload.incident) || inputs.incident_json }}
