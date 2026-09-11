@@ -1,0 +1,177 @@
+name: Reusable protected release gate
+
+on:
+  workflow_call:
+    inputs:
+      pull_request_number:
+        required: true
+        type: string
+      candidate_sha:
+        required: true
+        type: string
+      reviewed_head_sha:
+        required: true
+        type: string
+      ci_verified_sha:
+        required: true
+        type: string
+      target_environment:
+        required: true
+        type: string
+      environment_name:
+        required: true
+        type: string
+      risk:
+        required: true
+        type: string
+      staging_verified:
+        required: false
+        type: boolean
+        default: false
+      staging_evidence_sha256:
+        required: false
+        type: string
+        default: ''
+      slo_status:
+        required: false
+        type: string
+        default: not-required
+      slo_evidence_sha256:
+        required: false
+        type: string
+        default: ''
+      rollback_available:
+        required: false
+        type: boolean
+        default: false
+      manual_high_risk_release:
+        description: 'May be true only from a workflow_dispatch caller; critical risk is never authorized by this workflow'
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      authorized:
+        value: ${{ jobs.gate.outputs.authorized }}
+      release_evidence_json:
+        value: ${{ jobs.gate.outputs.release_evidence_json }}
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: ${{ inputs.environment_name }}
+    outputs:
+      authorized: ${{ steps.gate.outputs.authorized }}
+      release_evidence_json: ${{ steps.gate.outputs.release_evidence_json }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR_NUMBER: ${{ inputs.pull_request_number }}
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      REVIEWED_HEAD_SHA: ${{ inputs.reviewed_head_sha }}
+      CI_VERIFIED_SHA: ${{ inputs.ci_verified_sha }}
+      TARGET_ENVIRONMENT: ${{ inputs.target_environment }}
+      RISK: ${{ inputs.risk }}
+      STAGING_VERIFIED: ${{ inputs.staging_verified }}
+      STAGING_EVIDENCE_SHA256: ${{ inputs.staging_evidence_sha256 }}
+      SLO_STATUS: ${{ inputs.slo_status }}
+      SLO_EVIDENCE_SHA256: ${{ inputs.slo_evidence_sha256 }}
+      ROLLBACK_AVAILABLE: ${{ inputs.rollback_available }}
+      MANUAL_HIGH_RISK: ${{ inputs.manual_high_risk_release }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.candidate_sha }}
+          submodules: false
+
+      - name: Verify immutable review, CI, merge tree, reliability, and rollback preconditions
+        id: gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os, re
+          for name in ('CANDIDATE_SHA','REVIEWED_HEAD_SHA','CI_VERIFIED_SHA'):
+              if not re.fullmatch(r'[0-9a-f]{40}', os.environ[name]): raise SystemExit(f'{name} must be a full 40-character SHA')
+          if os.environ['TARGET_ENVIRONMENT'] not in {'staging','production'}: raise SystemExit('invalid target environment')
+          if os.environ['RISK'] not in {'low','moderate','high','critical'}: raise SystemExit('invalid risk')
+          PY
+
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA" || { echo '::error::Candidate checkout mismatch'; exit 1; }
+          test "$CI_VERIFIED_SHA" = "$CANDIDATE_SHA" || { echo '::error::CI attestation is not for the candidate SHA'; exit 1; }
+
+          gh pr view "$PR_NUMBER" --json number,state,mergedAt,headRefOid,baseRefName,url > "$RUNNER_TEMP/pr.json"
+          test "$(jq -r '.headRefOid' "$RUNNER_TEMP/pr.json")" = "$REVIEWED_HEAD_SHA" || { echo '::error::Reviewed SHA is not the PR head'; exit 1; }
+          jq -e '.mergedAt != null' "$RUNNER_TEMP/pr.json" >/dev/null || { echo '::error::Release requires a merged PR'; exit 1; }
+
+          git fetch --no-tags origin "$REVIEWED_HEAD_SHA" >/dev/null 2>&1
+          CANDIDATE_TREE="$(git rev-parse "$CANDIDATE_SHA^{tree}")"
+          REVIEWED_TREE="$(git rev-parse "$REVIEWED_HEAD_SHA^{tree}")"
+          test "$CANDIDATE_TREE" = "$REVIEWED_TREE" || {
+            echo '::error::Merged candidate tree differs from the independently reviewed PR head tree. Re-review the integrated result.'
+            exit 1
+          }
+
+          gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" > "$RUNNER_TEMP/comments.json"
+          jq -e --arg sha "$REVIEWED_HEAD_SHA" '
+            any(.[];
+              .user.login == "github-actions[bot]" and
+              ((.body // "") | contains("<!-- agentic-engineering-review:v1 -->")) and
+              ((.body // "") | contains("\"reviewed_head_sha\": \"" + $sha + "\"")) and
+              ((.body // "") | contains("\"disposition\": \"PASS\""))
+            )' "$RUNNER_TEMP/comments.json" >/dev/null || {
+              echo '::error::No PASS independent engineering review bound to the exact PR head SHA.'
+              exit 1
+            }
+
+          REASONS=()
+          AUTH=true
+          if [ "$TARGET_ENVIRONMENT" = production ]; then
+            DEFAULT_BRANCH="$(gh repo view "$GITHUB_REPOSITORY" --json defaultBranchRef --jq '.defaultBranchRef.name')"
+            git fetch --no-tags origin "$DEFAULT_BRANCH" >/dev/null 2>&1
+            test "$(git rev-parse "origin/$DEFAULT_BRANCH")" = "$CANDIDATE_SHA" || { echo '::error::Production candidate must be the current default-branch head'; exit 1; }
+
+            if [ "$STAGING_VERIFIED" != true ] || ! printf '%s' "$STAGING_EVIDENCE_SHA256" | grep -Eq '^[0-9a-f]{64}$'; then
+              AUTH=false; REASONS+=("missing hash-bound staging verification")
+            fi
+            if [ "$SLO_STATUS" != healthy ] || ! printf '%s' "$SLO_EVIDENCE_SHA256" | grep -Eq '^[0-9a-f]{64}$'; then
+              AUTH=false; REASONS+=("production SLO/error-budget state is not healthy and evidenced")
+            fi
+            if [ "$ROLLBACK_AVAILABLE" != true ]; then
+              AUTH=false; REASONS+=("no verified rollback path")
+            fi
+            if [ "$RISK" = critical ]; then
+              AUTH=false; REASONS+=("critical-risk releases require a human-led operational process")
+            elif [ "$RISK" = high ]; then
+              if [ "$MANUAL_HIGH_RISK" != true ] || [ "$GITHUB_EVENT_NAME" != workflow_dispatch ]; then
+                AUTH=false; REASONS+=("high-risk production release requires manual workflow_dispatch plus protected-environment approval")
+              fi
+            fi
+          fi
+
+          if [ "${#REASONS[@]}" -eq 0 ]; then REASONS+=("all central release preconditions satisfied"); fi
+          REASONS_JSON="$(printf '%s\n' "${REASONS[@]}" | jq -R . | jq -s .)"
+          EVIDENCE="$(jq -nc \
+            --arg repo "$GITHUB_REPOSITORY" \
+            --arg candidate "$CANDIDATE_SHA" \
+            --arg reviewed "$REVIEWED_HEAD_SHA" \
+            --arg env "$TARGET_ENVIRONMENT" \
+            --arg risk "$RISK" \
+            --arg ci "$CI_VERIFIED_SHA" \
+            --arg slo "$SLO_STATUS" \
+            --argjson staging "$STAGING_VERIFIED" \
+            --argjson rollback "$ROLLBACK_AVAILABLE" \
+            --argjson auth "$AUTH" \
+            --argjson reasons "$REASONS_JSON" \
+            '{version:1,repository:$repo,candidate_sha:$candidate,reviewed_head_sha:$reviewed,target_environment:$env,risk:$risk,ci_verified_sha:$ci,review_passed:true,staging_verified:$staging,slo_status:$slo,rollback_available:$rollback,authorized:$auth,reasons:$reasons}')"
+          echo "authorized=$AUTH" >> "$GITHUB_OUTPUT"
+          echo "release_evidence_json=$EVIDENCE" >> "$GITHUB_OUTPUT"
+          if [ "$AUTH" != true ]; then
+            printf '::error::Release not authorized: %s\n' "${REASONS[*]}"
+            exit 1
+          fi
