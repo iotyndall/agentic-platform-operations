@@ -84,7 +84,10 @@ jobs:
           case "$DISP" in PASS|REVISE|ESCALATE) ;; *) exit 1 ;; esac
           case "$RISK" in low|moderate|high|critical) ;; *) exit 1 ;; esac
           if [ "$DISP" = PASS ]; then test "$READY" = true; else test "$READY" = false; fi
-          { echo 'review_json<<__REVIEW__'; cat "$F"; echo '__REVIEW__'; } >> "$GITHUB_OUTPUT"
+          # GitHub multiline outputs are delimiter-sensitive. Compact validated JSON to one line
+          # before exporting so review text can never collide with an output delimiter.
+          COMPACT="$(jq -c . "$F")"
+          printf 'review_json=%s\n' "$COMPACT" >> "$GITHUB_OUTPUT"
 
   publish:
     needs: analyze
