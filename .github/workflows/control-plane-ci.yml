@@ -76,6 +76,9 @@ jobs:
       - name: Run full control-plane safety self-test
         run: python scripts/control_plane_selftest.py
 
+      - name: Run live integration contract regression tests
+        run: python scripts/integration_contract_selftest.py
+
       - name: Compile Python control-plane scripts
         run: python -m py_compile scripts/*.py
 
