@@ -12,6 +12,10 @@ on:
       environment_name:
         required: true
         type: string
+      pull_request_number:
+        required: false
+        type: string
+        default: ''
       config_path:
         required: false
         type: string
@@ -26,6 +30,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 jobs:
   verify:
@@ -37,8 +42,10 @@ jobs:
       evidence_sha256: ${{ steps.check.outputs.evidence_sha256 }}
       verified_sha: ${{ steps.check.outputs.verified_sha }}
     env:
+      GH_TOKEN: ${{ github.token }}
       CANDIDATE_SHA: ${{ inputs.candidate_sha }}
       TARGET_ENVIRONMENT: ${{ inputs.target_environment }}
+      PR_NUMBER: ${{ inputs.pull_request_number }}
       CONFIG_PATH: ${{ inputs.config_path }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -70,7 +77,6 @@ jobs:
           RC=$?
           set -e
 
-          # Never echo raw synthetic output. Refuse to retain evidence that appears to contain credentials.
           python - "$OUT" <<'PY'
           import re, sys
           text=open(sys.argv[1],errors='replace').read()
@@ -88,3 +94,7 @@ jobs:
           echo "evidence_sha256=$DIGEST" >> "$GITHUB_OUTPUT"
           echo "verified_sha=$ACTUAL" >> "$GITHUB_OUTPUT"
           echo "$TARGET_ENVIRONMENT verification passed for $ACTUAL (evidence sha256=$DIGEST)."
+
+          if [ -n "$PR_NUMBER" ]; then
+            gh pr comment "$PR_NUMBER" --body "<!-- agentic-deploy-verification:v1 env=$TARGET_ENVIRONMENT sha=$ACTUAL evidence=$DIGEST -->\nDeployment verification passed for **$TARGET_ENVIRONMENT** at \`$ACTUAL\`. Evidence metadata hash: \`$DIGEST\`. Raw synthetic output is not retained in the PR."
+          fi
