@@ -29,6 +29,15 @@ def main() -> None:
     require("found-critical-ghsa.txt" in security,
             "Security ratchet no longer materializes an explicit critical-advisory evidence set")
 
+    require("ANTHROPIC_API_KEY[[:space:]]" not in security,
+            "Secret guard again treats generic documented ANTHROPIC_API_KEY assignments as secrets")
+    require("OPENAI_API_KEY[[:space:]]" not in security,
+            "Secret guard again treats generic documented OPENAI_API_KEY assignments as secrets")
+    require("sk-ant-[A-Za-z0-9_-]{20,}" in security,
+            "Secret guard lost high-confidence Anthropic token detection")
+    require("private-key-block" in security and "{80,}" in security,
+            "Secret guard no longer requires a substantive private-key block")
+
     print("PASS live integration contract regressions")
 
 
