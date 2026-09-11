@@ -1,0 +1,21 @@
+name: Platform Incident Triage
+
+on:
+  repository_dispatch:
+    types: [agentic-triage]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        required: true
+        type: string
+
+jobs:
+  triage:
+    permissions:
+      contents: read
+      issues: write
+    uses: iotyndall/agentic-platform-operations/.github/workflows/reusable-triage.yml@PINNED_REF
+    with:
+      issue_number: ${{ github.event.client_payload.issue_number || inputs.issue_number }}
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
