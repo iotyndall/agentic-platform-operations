@@ -100,16 +100,19 @@ jobs:
       - name: Smoke-test SLO math semantics
         run: |
           python - <<'PY'
-          def state(target, good, total, caution=.5):
+          from decimal import Decimal
+          def state(target, good, total, caution='0.5'):
+              target=Decimal(str(target)); caution=Decimal(str(caution))
               if total == 0: return 'unknown'
-              bad=total-good; allowed=(1-target)*total
-              ratio=(0 if bad==0 else float('inf')) if allowed<=0 else bad/allowed
-              if ratio >= 1: return 'exhausted'
+              bad=Decimal(total-good); allowed=(Decimal('1')-target)*Decimal(total)
+              if allowed <= 0: return 'healthy' if bad == 0 else 'exhausted'
+              ratio=bad/allowed
+              if ratio >= Decimal('1'): return 'exhausted'
               if ratio >= caution: return 'caution'
               return 'healthy'
-          assert state(.999, 10000, 10000) == 'healthy'
-          assert state(.999, 9995, 10000) == 'caution'
-          assert state(.999, 9990, 10000) == 'exhausted'
-          assert state(.999, 0, 0) == 'unknown'
+          assert state('0.999', 10000, 10000) == 'healthy'
+          assert state('0.999', 9995, 10000) == 'caution'
+          assert state('0.999', 9990, 10000) == 'exhausted'
+          assert state('0.999', 0, 0) == 'unknown'
           print('PASS deterministic error-budget states')
           PY
