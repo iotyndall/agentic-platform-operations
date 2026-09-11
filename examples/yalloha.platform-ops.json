@@ -1,0 +1,81 @@
+{
+  "version": 1,
+  "project": {
+    "name": "YALLOHA",
+    "repository": "iotyndall/YALLOHA",
+    "defaultBranch": "main",
+    "autonomyLevel": 2
+  },
+  "runtime": {
+    "kind": "mixed",
+    "nodeVersion": "22",
+    "pythonVersion": "3.11",
+    "packageManager": "pnpm"
+  },
+  "commands": {
+    "install": "pnpm install --frozen-lockfile",
+    "typecheck": "pnpm type-check",
+    "test": "pnpm test",
+    "lint": "pnpm lint",
+    "build": "pnpm build",
+    "migrationCheck": "echo 'Use the existing Supabase migration replay + tenant-isolation CI job'",
+    "integration": "",
+    "productionVerify": "python .github/scripts/daily_yalloha_agent.py --self-test"
+  },
+  "risk": {
+    "protectedPathRegex": "^(\\.github/|\\.env|supabase/migrations/|drizzle\\.config\\.|middleware\\.)|(^|/)(auth|stripe|payment|secret|credential)(/|\\.)",
+    "maxAutonomousProductionLines": 60,
+    "maxRepairAttempts": 2,
+    "escalationDomains": [
+      "authentication",
+      "authorization",
+      "row-level-security",
+      "secrets",
+      "destructive-data",
+      "irreversible-migrations",
+      "payments",
+      "workflow-policy"
+    ]
+  },
+  "security": {
+    "dependencyAuditCommand": "pnpm audit --prod --json",
+    "criticalAdvisoryAllowlist": []
+  },
+  "infrastructure": {
+    "deploymentProvider": "Vercel",
+    "database": "Supabase Postgres",
+    "observability": ["Sentry", "Vercel", "Supabase", "GitHub Actions"],
+    "externalSystems": ["Meta Graph API", "Trigger.dev", "Stripe", "Anthropic"]
+  },
+  "production": {
+    "criticalJourneys": [
+      {
+        "id": "production-health-signals",
+        "description": "Runtime/build/database/application signals remain observable and the health agent never interprets missing telemetry as a clean result.",
+        "owner": "local",
+        "command": "python .github/scripts/daily_yalloha_agent.py --self-test",
+        "severityOnFailure": "P1"
+      },
+      {
+        "id": "tenant-isolation",
+        "description": "Migrations replay from scratch and tenant/RLS isolation assertions pass.",
+        "owner": "local",
+        "command": "",
+        "severityOnFailure": "P0"
+      },
+      {
+        "id": "scheduled-publishing",
+        "description": "Scheduled social posts do not remain overdue and enabled agents continue producing/publishing expected output.",
+        "owner": "local",
+        "command": "",
+        "severityOnFailure": "P1"
+      }
+    ]
+  },
+  "repair": {
+    "enabled": true,
+    "minimumConfidence": "high",
+    "issueLabel": "auto-triage",
+    "provenanceRegex": "<!--[[:space:]]*yalloha-agent:[[:space:]]*fp=[a-z0-9][a-z0-9-]*[[:space:]]+seen=[0-9]+[[:space:]]+last=[^[:space:]]+[[:space:]]*-->"
+  }
+}
