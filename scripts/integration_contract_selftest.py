@@ -14,16 +14,25 @@ def require(condition: bool, message: str) -> None:
 def main() -> None:
     node_ci = (WORKFLOWS / "reusable-node-ci.yml").read_text(encoding="utf-8")
     security = (WORKFLOWS / "reusable-security.yml").read_text(encoding="utf-8")
+    audit_parser = (ROOT / "scripts" / "extract_critical_advisories.py").read_text(encoding="utf-8")
 
     require("grep -q $'\\n'" not in node_ci,
             "Node CI reintroduced the grep-newline bug that rejects every nonempty contract value")
     require("[[ \"$value\" == *$'\\n'* ]]" in node_ci,
             "Node CI no longer checks embedded newlines safely")
 
-    require("str(advisory.get('severity', '')).lower() != 'critical'" in security,
-            "Security ratchet no longer filters audit evidence structurally to critical severity")
-    require("advisory.get('github_advisory_id')" in security,
-            "Security ratchet no longer reads the advisory's canonical GHSA field")
+    require("scripts/extract_critical_advisories.py" in security,
+            "Security ratchet no longer delegates audit evidence parsing to the tested parser")
+    require("data.get(\"advisories\")" in audit_parser and "data.get(\"vulnerabilities\")" in audit_parser,
+            "Security ratchet parser must support both legacy and npm audit v2 evidence shapes")
+    require("lower() != \"critical\"" in audit_parser,
+            "Security ratchet parser no longer filters advisory evidence structurally to critical severity")
+    require("GHSA_RE" in audit_parser and "github_advisory_id" in audit_parser,
+            "Security ratchet parser no longer resolves canonical GHSA identifiers")
+    require("declared_critical == 0" in audit_parser,
+            "npm audit v2 parser no longer proves zero-critical lower-severity evidence from metadata")
+    require("no critical GHSA identifier could be resolved" in audit_parser,
+            "Security ratchet parser no longer fails closed on ambiguous critical evidence")
     require("grep -Eo 'GHSA-" not in security,
             "Security ratchet reverted to scraping arbitrary GHSA references from audit prose")
     require("found-critical-ghsa.txt" in security,
