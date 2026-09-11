@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/iotyndall/agentic-platform-operations/schemas/release-evidence.schema.json",
+  "title": "Release Gate Evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "repository", "candidate_sha", "reviewed_head_sha", "target_environment", "risk", "ci_verified_sha", "review_passed", "staging_verified", "slo_status", "rollback_available", "authorized"],
+  "properties": {
+    "version": {"const": 1},
+    "repository": {"type": "string", "pattern": "^[^/]+/[^/]+$"},
+    "candidate_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "reviewed_head_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "target_environment": {"enum": ["staging", "production"]},
+    "risk": {"enum": ["low", "moderate", "high", "critical"]},
+    "ci_verified_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "review_passed": {"type": "boolean"},
+    "staging_verified": {"type": "boolean"},
+    "slo_status": {"enum": ["healthy", "caution", "exhausted", "unknown", "not-required"]},
+    "rollback_available": {"type": "boolean"},
+    "authorized": {"type": "boolean"},
+    "reasons": {"type": "array", "items": {"type": "string"}},
+    "generated_at": {"type": "string", "format": "date-time"}
+  }
+}
