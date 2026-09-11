@@ -68,33 +68,117 @@ jobs:
           python - "$RUNNER_TEMP/audit.json" "$RUNNER_TEMP/found-critical-ghsa.txt" <<'PY'
           import json, re, sys
 
+          GHSA_RE = re.compile(r'GHSA-[A-Za-z0-9-]+')
+
+          def extract_ghsa(advisory):
+              ghsa = advisory.get('github_advisory_id')
+              if isinstance(ghsa, str) and GHSA_RE.fullmatch(ghsa):
+                  return ghsa
+              url = advisory.get('url')
+              if isinstance(url, str):
+                  match = GHSA_RE.search(url)
+                  if match:
+                      return match.group(0)
+              return None
+
+          def critical_ids(data):
+              # npm audit v1 / older-compatible shape
+              advisories = data.get('advisories')
+              if isinstance(advisories, dict):
+                  found, malformed = set(), []
+                  for advisory in advisories.values():
+                      if str(advisory.get('severity', '')).lower() != 'critical':
+                          continue
+                      ghsa = extract_ghsa(advisory)
+                      if ghsa:
+                          found.add(ghsa)
+                      else:
+                          malformed.append(str(advisory.get('github_advisory_id') or advisory.get('url')))
+                  if malformed:
+                      raise ValueError('Critical advisories were present without valid GHSA IDs: ' + ', '.join(malformed))
+                  return found
+
+              # npm audit v2 shape: vulnerabilities -> via (objects and/or dependency names).
+              vulnerabilities = data.get('vulnerabilities')
+              if isinstance(vulnerabilities, dict):
+                  critical_roots = {
+                      name for name, vuln in vulnerabilities.items()
+                      if isinstance(vuln, dict) and str(vuln.get('severity', '')).lower() == 'critical'
+                  }
+                  found, malformed = set(), []
+
+                  def walk(name, seen):
+                      if name in seen:
+                          return
+                      seen.add(name)
+                      vuln = vulnerabilities.get(name)
+                      if not isinstance(vuln, dict):
+                          return
+                      for via in vuln.get('via', []):
+                          if isinstance(via, str):
+                              if via in vulnerabilities:
+                                  walk(via, seen)
+                              continue
+                          if not isinstance(via, dict):
+                              continue
+                          if str(via.get('severity', '')).lower() != 'critical':
+                              continue
+                          ghsa = extract_ghsa(via)
+                          if ghsa:
+                              found.add(ghsa)
+                          else:
+                              malformed.append(f'{name}:{via.get("url") or via.get("source") or "unknown"}')
+
+                  for name in sorted(critical_roots):
+                      walk(name, set())
+
+                  metadata_critical = data.get('metadata', {}).get('vulnerabilities', {}).get('critical')
+                  if metadata_critical is not None:
+                      try:
+                          reported = int(metadata_critical)
+                      except (TypeError, ValueError):
+                          raise ValueError('npm audit v2 metadata.vulnerabilities.critical is not an integer')
+                      if reported > 0 and not critical_roots:
+                          raise ValueError('npm audit reports critical vulnerabilities but no critical vulnerability objects were found')
+
+                  if malformed:
+                      raise ValueError('Critical advisories were present without valid GHSA IDs: ' + ', '.join(malformed))
+                  if critical_roots and not found:
+                      raise ValueError('Critical vulnerabilities were present but no GHSA advisory ID could be resolved')
+                  return found
+
+              raise ValueError('Dependency audit JSON has neither advisories nor vulnerabilities; refusing ambiguous security evidence.')
+
+          # Regression checks execute inside the exact parser used in every security run.
+          assert critical_ids({
+              'advisories': {
+                  '1': {'severity': 'critical', 'github_advisory_id': 'GHSA-aaaa-bbbb-cccc'},
+                  '2': {'severity': 'moderate', 'github_advisory_id': 'GHSA-dddd-eeee-ffff'},
+              }
+          }) == {'GHSA-aaaa-bbbb-cccc'}
+          assert critical_ids({
+              'vulnerabilities': {
+                  'root': {'severity': 'critical', 'via': ['dep']},
+                  'dep': {'severity': 'critical', 'via': [{'severity': 'critical', 'url': 'https://github.com/advisories/GHSA-1111-2222-3333'}]},
+                  'moderate': {'severity': 'moderate', 'via': [{'severity': 'moderate', 'url': 'https://github.com/advisories/GHSA-4444-5555-6666'}]},
+              },
+              'metadata': {'vulnerabilities': {'critical': 2}}
+          }) == {'GHSA-1111-2222-3333'}
+          assert critical_ids({
+              'vulnerabilities': {'pkg': {'severity': 'moderate', 'via': []}},
+              'metadata': {'vulnerabilities': {'critical': 0}}
+          }) == set()
+
           source, destination = sys.argv[1:]
           try:
               with open(source, encoding='utf-8') as f:
                   data = json.load(f)
+              critical = critical_ids(data)
           except Exception as exc:
-              raise SystemExit(f'::error::Dependency audit did not emit parseable JSON: {exc}')
-
-          advisories = data.get('advisories')
-          if not isinstance(advisories, dict):
-              raise SystemExit('::error::Dependency audit JSON has no advisories object; refusing ambiguous security evidence.')
-
-          critical = []
-          malformed = []
-          for advisory in advisories.values():
-              if str(advisory.get('severity', '')).lower() != 'critical':
-                  continue
-              ghsa = advisory.get('github_advisory_id')
-              if not isinstance(ghsa, str) or not re.fullmatch(r'GHSA-[A-Za-z0-9-]+', ghsa):
-                  malformed.append(str(ghsa))
-                  continue
-              critical.append(ghsa)
-
-          if malformed:
-              raise SystemExit('::error::Critical advisories were present without valid GHSA IDs: ' + ', '.join(malformed))
+              raise SystemExit(f'::error::Dependency audit evidence is ambiguous: {exc}')
 
           with open(destination, 'w', encoding='utf-8') as f:
-              for ghsa in sorted(set(critical)):
+              for ghsa in sorted(critical):
                   f.write(ghsa + '\n')
           PY
 
