@@ -1,0 +1,92 @@
+name: Reusable policy and risk classification
+
+on:
+  workflow_call:
+    inputs:
+      config_path:
+        required: false
+        type: string
+        default: '.agentic/platform-ops.json'
+    outputs:
+      risk:
+        description: 'low, moderate, or high'
+        value: ${{ jobs.classify.outputs.risk }}
+      changed_count:
+        description: 'Number of changed files'
+        value: ${{ jobs.classify.outputs.changed_count }}
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  classify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    outputs:
+      risk: ${{ steps.risk.outputs.risk }}
+      changed_count: ${{ steps.risk.outputs.changed_count }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Validate local safety contract
+        env:
+          CONFIG_PATH: ${{ inputs.config_path }}
+        run: |
+          set -euo pipefail
+          test -f "$CONFIG_PATH"
+          jq -e '.version == 1' "$CONFIG_PATH" >/dev/null
+          jq -e --arg repo "$GITHUB_REPOSITORY" '.project.repository == $repo' "$CONFIG_PATH" >/dev/null
+          jq -e '.risk.unknownRiskDefaultsTo == "high" or .risk.unknownRiskDefaultsTo == "critical" or .risk.unknownRiskDefaultsTo == null' "$CONFIG_PATH" >/dev/null
+
+      - name: Classify changed-file risk
+        id: risk
+        env:
+          CONFIG_PATH: ${{ inputs.config_path }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ -n "${PR_BASE_SHA:-}" ]; then
+            BASE="$PR_BASE_SHA"
+          else
+            BASE="$(git rev-parse HEAD^)"
+          fi
+          git diff --name-only "$BASE...HEAD" | sort -u > "$RUNNER_TEMP/changed.txt"
+          COUNT="$(wc -l < "$RUNNER_TEMP/changed.txt" | tr -d ' ')"
+          echo "changed_count=$COUNT" >> "$GITHUB_OUTPUT"
+
+          if [ "$COUNT" -eq 0 ]; then
+            echo 'risk=low' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          PROTECTED_RE="$(jq -r '.risk.protectedPathRegex' "$CONFIG_PATH")"
+          CENTRAL_HIGH='^(\.github/|\.agentic/|infrastructure/|terraform/|supabase/migrations/|auth/|billing/|security/)|(^|/)(Dockerfile|compose[^/]*\.ya?ml|agent-policy\.md)$'
+          if grep -Eiq -- "$CENTRAL_HIGH" "$RUNNER_TEMP/changed.txt" || grep -Eiq -- "$PROTECTED_RE" "$RUNNER_TEMP/changed.txt"; then
+            RISK=high
+          elif awk '
+            /(^|\/)(docs?|tests?|__tests__|fixtures?)\// {next}
+            /\.(md|txt|test\.[^.]+|spec\.[^.]+)$/ {next}
+            {exit 1}
+          ' "$RUNNER_TEMP/changed.txt"; then
+            RISK=low
+          else
+            RISK=moderate
+          fi
+
+          echo "risk=$RISK" >> "$GITHUB_OUTPUT"
+          {
+            echo '### Platform risk classification'
+            echo
+            echo "**Risk:** $RISK"
+            echo "**Changed files:** $COUNT"
+            echo
+            echo 'High-risk path matches are not autonomous promotion candidates. Unknown risk defaults high in downstream promotion policy.'
+            echo
+            echo '```text'
+            cat "$RUNNER_TEMP/changed.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
