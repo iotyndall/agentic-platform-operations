@@ -1,0 +1,90 @@
+name: Reusable post-deploy verification
+
+on:
+  workflow_call:
+    inputs:
+      candidate_sha:
+        required: true
+        type: string
+      target_environment:
+        required: true
+        type: string
+      environment_name:
+        required: true
+        type: string
+      config_path:
+        required: false
+        type: string
+        default: '.agentic/platform-ops.json'
+    outputs:
+      verified:
+        value: ${{ jobs.verify.outputs.verified }}
+      evidence_sha256:
+        value: ${{ jobs.verify.outputs.evidence_sha256 }}
+      verified_sha:
+        value: ${{ jobs.verify.outputs.verified_sha }}
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: ${{ inputs.environment_name }}
+    outputs:
+      verified: ${{ steps.check.outputs.verified }}
+      evidence_sha256: ${{ steps.check.outputs.evidence_sha256 }}
+      verified_sha: ${{ steps.check.outputs.verified_sha }}
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      TARGET_ENVIRONMENT: ${{ inputs.target_environment }}
+      CONFIG_PATH: ${{ inputs.config_path }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          submodules: false
+
+      - name: Execute declared synthetic verification without retaining raw output
+        id: check
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$TARGET_ENVIRONMENT" in staging|production) ;; *) echo '::error::target_environment must be staging or production'; exit 1 ;; esac
+          test -f "$CONFIG_PATH" || { echo "::error::Missing $CONFIG_PATH"; exit 1; }
+          ACTUAL="$(git rev-parse HEAD)"
+          test "$ACTUAL" = "$CANDIDATE_SHA" || { echo '::error::Verification checkout SHA mismatch'; exit 1; }
+
+          if [ "$TARGET_ENVIRONMENT" = staging ]; then
+            COMMAND="$(jq -r '.commands.stagingVerify // ""' "$CONFIG_PATH")"
+          else
+            COMMAND="$(jq -r '.commands.productionVerify // ""' "$CONFIG_PATH")"
+          fi
+          test -n "$COMMAND" || { echo "::error::No $TARGET_ENVIRONMENT verification command declared"; exit 1; }
+          if printf '%s' "$COMMAND" | grep -q $'\n'; then echo '::error::Verification command must be single-line'; exit 1; fi
+
+          OUT="$RUNNER_TEMP/verify.out"
+          set +e
+          bash -euo pipefail -c "$COMMAND" >"$OUT" 2>&1
+          RC=$?
+          set -e
+
+          # Never echo raw synthetic output. Refuse to retain evidence that appears to contain credentials.
+          python - "$OUT" <<'PY'
+          import re, sys
+          text=open(sys.argv[1],errors='replace').read()
+          pats=[r'(?i)authorization\s*[:=]\s*bearer\s+\S+',r'\bAKIA[0-9A-Z]{16}\b',r'\bgh[pousr]_[A-Za-z0-9_]{20,}\b',r'\bsk-[A-Za-z0-9_-]{20,}\b',r'eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}']
+          if any(re.search(p,text) for p in pats):
+              raise SystemExit('verification output appears to contain a credential/token; evidence retention refused')
+          PY
+          DIGEST="$(sha256sum "$OUT" | awk '{print $1}')"
+          rm -f "$OUT"
+          if [ "$RC" -ne 0 ]; then
+            echo "::error::$TARGET_ENVIRONMENT synthetic verification failed (output withheld; sha256=$DIGEST)"
+            exit "$RC"
+          fi
+          echo 'verified=true' >> "$GITHUB_OUTPUT"
+          echo "evidence_sha256=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "verified_sha=$ACTUAL" >> "$GITHUB_OUTPUT"
+          echo "$TARGET_ENVIRONMENT verification passed for $ACTUAL (evidence sha256=$DIGEST)."
