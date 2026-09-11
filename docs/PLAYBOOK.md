@@ -1,160 +1,183 @@
-# Canonical Agentic Engineering Playbook
+# Canonical Agentic Engineering Operations Playbook
 
-## Mission
+## Purpose
 
-Maximize useful engineering autonomy without letting model confidence substitute for evidence. The system should continuously improve software, detect production failures, propose repairs, and eventually promote low-risk changes while keeping blast radius bounded and recovery fast.
+Build a GitHub-centered operating system for engineering maintenance and reliability that improves stability, uptime, security, and delivery quality over time.
 
-## Operating loop
+The desired behavior is bounded self-healing:
 
-`observe → orient → decide → act → verify → learn`
+`detect → collect evidence → classify → safely mitigate → reproduce → repair → validate → review → release → verify → learn`
 
-The loop is intentionally OODA-like, but deterministic code should handle facts it can establish cheaply and reliably. LLM reasoning is reserved for ambiguity, diagnosis, prioritization, implementation, and adversarial review.
+GitHub coordinates engineering work and policy. Runtime observability remains the source of truth for whether users are actually healthy.
 
-## Roles
+## Non-negotiable principles
 
-### Builder
+1. Preserve customer safety and data integrity over autonomous speed.
+2. Require executable evidence for code repair: a green baseline, a failing reproduction before repair, and passing evidence after repair.
+3. Let automation execute production actions only when they are explicitly pre-authorized, reversible, scoped, observable, and backed by a versioned runbook.
+4. Separate the roles that detect, reproduce, repair, review, and release a change.
+5. Treat unknown or missing evidence as uncertainty, not health.
+6. Every material incident must improve a test, monitor, runbook, rollback capability, policy, security control, architecture decision, or owned reliability backlog item.
 
-- Read the originating issue and local project contract.
-- Reproduce the defect or requirement where practical.
-- Make the smallest coherent change that solves the root cause.
-- Add/update deterministic tests for repaired defects where practical.
-- Never weaken tests, validation, authorization, tenant isolation, observability, or error handling merely to obtain green CI.
+The full non-negotiable authority boundary lives in `.github/agent-policy.md`.
 
-### Reviewer
+## Roles and authority
 
-- Be independent of the builder where possible.
-- Attempt to falsify the solution.
-- Inspect correctness, security, data integrity, tenant boundaries, scope creep, missing regression coverage, operational impact, and rollback assumptions.
-- Return PASS or ESCALATE with concrete findings.
+### Triage
+Consumes runtime signals and approved redacted evidence. Produces severity, impact, evidence summary, confidence, hypotheses, and next-step recommendation. It may create/update incidents but may not modify code or production.
 
-### Gatekeeper
+### Reproduction
+Turns a credible incident hypothesis into executable evidence. It may create only test/fixture/reproduction artifacts. The baseline suite must be green before its change; the reproduction must then cause a deterministic failure while remaining type/lint valid. It must not repair the defect.
 
-Deterministic workflow code is authoritative for:
+### Repair
+Starts from the exact immutable failing reproduction. It may make the smallest production-code patch necessary, but it may not edit the reproduction evidence, protected paths, control-plane policy/workflows, or sensitive production domains. It may open a PR only.
 
-- compile/typecheck;
-- unit/integration tests;
-- lint/static analysis;
-- production build;
-- migration replay/schema checks;
-- tenant isolation/RLS checks;
-- security/dependency policy;
-- changed-path restrictions;
-- diff-size/backstop limits;
-- critical-path smoke tests;
-- stale-head/review checks.
+### Review
+Receives the issue, immutable reproduction evidence, PR diff, deterministic results, architecture constraints, and rollback plan. It attempts to falsify correctness/security and emits PASS or ESCALATE against an exact reviewed SHA. It may not edit code or deploy.
 
-No agent can waive a failed deterministic gate.
+### Release
+May deploy only an already-reviewed immutable commit through protected staging/production workflows. It cannot author or approve the code. It owns staging evidence, production verification, and approved rollback decisions.
 
-### Recovery
+### Learning
+Converts a resolved incident into curated operational memory and durable prevention. It may author docs/issues/PRs but cannot rewrite historical evidence or production state.
 
-- Restore service before pursuing an elegant root-cause repair when a fresh deployment causes a production regression.
-- Prefer rollback/known-good restoration when safe and available.
-- Keep repair attempts bounded.
-- Preserve evidence for later diagnosis.
+### Security
+Consumes deterministic dependency/secret/static-analysis findings and produces bounded remediation proposals. Sensitive rotation, access revocation, customer notification, and root credentials remain human-authorized unless a narrowly scoped runbook explicitly says otherwise.
 
-## Risk classes
+## Separation of duties
 
-### GREEN — eligible for high autonomy
+An agent that authors a patch must never approve, merge, or deploy that patch. A reproduction agent must not repair the failure it demonstrates. A review agent must not rewrite the patch it is judging. A release agent may act only on an already-approved immutable commit. Deterministic checks cannot be waived by any model.
 
-Typical examples:
+## Risk model
 
-- small bug fix with deterministic reproduction;
-- isolated UI/logic defect away from security/data boundaries;
-- dependency patch/minor update that passes the full suite;
-- documentation/test-only correction;
-- high-confidence production repair within configured path/size limits.
+### LOW
+Documentation, copy/styling, test-only changes, or isolated logic fixes with comprehensive executable evidence and no sensitive path involvement. LOW changes may eventually be autonomous through review and release if the project contract permits it.
 
-Requirements: all deterministic gates pass, independent review passes when auto-promotion is enabled, rollback is straightforward, and post-deploy verification exists.
+### MODERATE
+API handlers, queues, meaningful product behavior, dependency changes, third-party integration behavior, or non-sensitive configuration. Require independent review and staging evidence; production automation remains constrained until project-specific controls are proven.
 
-### YELLOW — proposal autonomous, promotion constrained
+### HIGH / CRITICAL
+Authentication, authorization/RLS, billing/payments, secrets/credentials, production workflows, infrastructure, destructive data/schema operations, irreversible migrations, customer-data remediation, root credentials, or changes whose failure is hard to detect/reverse. Human approval or human-led operations are required. Unknown risk defaults high.
 
-Typical examples:
-
-- moderate refactor;
-- integration behavior change;
-- dependency major-version upgrade;
-- pricing/booking/publishing behavior change;
-- migration that is additive but operationally meaningful;
-- observability or infrastructure changes that can hide failures if wrong.
-
-Require stronger independent review and normally human approval until project-specific automation proves equivalent controls.
-
-### RED — escalation only
-
-Default RED domains:
-
-- authentication/authorization/RLS;
-- secrets/credentials/key rotation;
-- destructive database/schema/data operations;
-- irreversible migrations;
-- payment authorization or money movement;
-- broad infrastructure changes;
-- removal/weakening of safety or observability controls;
-- changes whose failure could be difficult to detect or reverse.
-
-Projects may add RED domains but should not silently remove these defaults.
+The local project contract may add high-risk domains but may not silently remove central defaults.
 
 ## Incident lifecycle
 
-1. **Detect.** Prefer deterministic invariants and persistent error stores over sampled logs.
-2. **Qualify evidence.** Absence of telemetry is not evidence of health. Report observation coverage explicitly.
-3. **Dedupe.** Use stable fingerprints, not model-generated titles.
-4. **Classify.** Severity and confidence are separate. High severity does not imply high-confidence diagnosis.
-5. **Restore if necessary.** For a fresh production regression, recovery can precede root-cause repair.
-6. **Determine repair eligibility.** Small + reversible + high-confidence + outside protected domains.
-7. **Repair on a branch.** Never direct-to-main.
-8. **Run deterministic gates.** Validate the actual branch/diff produced by the builder.
-9. **Independent review.** Different model/reviewer where possible.
-10. **Promote or escalate.** GREEN may eventually auto-merge; YELLOW/RED stop.
-11. **Verify production.** Critical user journeys must pass after deployment.
-12. **Learn.** Add the missing regression test/invariant so the same class of failure is cheaper to catch next time.
+1. **Detect.** Prefer deterministic health invariants, persistent error stores, synthetic journeys, deployment events, and security scanners over sampled anecdotes.
+2. **Collect evidence.** Limit evidence to the affected service/time window, scrub secrets/customer data, preserve immutable IDs/hashes, and record observation coverage.
+3. **Dedupe.** Correlate by stable fingerprint, service, deployment SHA, endpoint/job, time window, and signal—not model-generated titles.
+4. **Classify.** Severity, impact, diagnosis confidence, and change risk are separate dimensions.
+5. **Safely mitigate when authorized.** Restoration may precede diagnosis after a fresh bad deployment, but only through a pre-approved runbook whose preconditions are mechanically satisfied.
+6. **Reproduce.** Baseline tests pass; a test-only branch establishes deterministic failing evidence. If executable reproduction is impossible, document why and generally escalate above LOW.
+7. **Repair.** Work from the immutable reproduction branch/SHA. The repair may not modify the evidence that proves the failure.
+8. **Validate.** Run configured type, lint, unit, integration, migration/schema, external contract, browser/synthetic, security, build, and blast-radius checks.
+9. **Review.** Independent reviewer attacks the patch and returns a decision tied to the exact head SHA.
+10. **Release.** Staging first, then production through protected environment policy. Production credentials are not available to PR workflows.
+11. **Verify.** Measure the business-critical journey and runtime telemetry during a defined observation window.
+12. **Rollback/escalate if needed.** Prefer known-good restoration to speculative forward edits when rollback compatibility is proven.
+13. **Learn.** Curate a postmortem/lesson and create at least one durable improvement or owned reliability item.
 
-## Autonomous repair rules
+## Executable evidence rules
 
-A repair candidate should be rejected automatically when any of these apply:
+The primary evidence type depends on the failure:
 
-- confidence is below the project's threshold;
-- protected paths are touched;
-- production diff exceeds the configured limit;
-- data/schema migration is involved unless explicitly allowed;
-- security-sensitive behavior is involved;
-- no meaningful deterministic reproduction or verification exists for a risky change;
-- the repair attempts to edit the workflow/policy that is judging it;
-- the branch/head changed after review;
-- the maximum repair-attempt count has been reached.
+- deterministic business logic → unit test;
+- API/database/auth/queue behavior → integration test;
+- browser/customer workflow → browser or deployed synthetic test;
+- third-party API/webhook behavior → contract test with fixtures;
+- deployment/configuration failure → configuration assertion plus deployed synthetic check;
+- latency/saturation regression → performance/load check plus telemetry threshold.
 
-Prefer a safe refusal over speculative editing.
+For webhook-driven systems, test duplicate, out-of-order, retried, invalid-signature, timeout/retry, partial-database-failure, idempotency collision, rate-limit, generation failure, and dead-letter behavior where relevant.
 
-## Security ratchet
+A repair must never alter its reproduction test merely to achieve green CI. If the reproduction is later proven invalid, that is a new reviewed reproduction decision, not part of the repair.
 
-Legacy repositories may contain known dependency vulnerabilities. Do not solve this by disabling the audit.
+## Deterministic gatekeeper
 
-Use a ratchet:
+The gatekeeper should prefer code over LLM judgment for facts it can establish mechanically:
 
-- record exact known advisory IDs in the project contract;
-- open remediation issues for them;
-- fail immediately on any new critical advisory;
-- remove each baseline exception as soon as it is remediated.
+- committed lockfile installation;
+- typecheck/compile;
+- lint/static analysis;
+- unit/integration tests;
+- migration replay/schema checks;
+- tenant isolation/RLS tests;
+- dependency/security policy;
+- secret/credential scanning;
+- changed-path risk classification;
+- production diff-size limits;
+- immutable reproduction integrity;
+- external contract and browser tests;
+- build verification;
+- reviewed-head/stale-review checks;
+- critical production journey verification.
 
-A major framework upgrade should be its own reviewed change, not hidden inside control-plane installation.
+No agent can convert a red deterministic check into a pass through explanation or confidence.
 
-## Production verification
+## Evidence handling
 
-Every project must name its critical user journeys. Examples:
+Evidence bundles follow `schemas/evidence.schema.json` and incidents follow `schemas/incident.schema.json`.
 
-- Mesa Direct: public property site → correct Hospitable booking widget → Hospitable reachable.
-- YALLOHA: authentication/tenant boundaries, scheduled publishing, Meta connectivity, production build/runtime signals, and core data invariants.
+Agents receive the narrowest sufficient bundle. Evidence must be scrubbed of secrets and customer content, limited to the affected service/time range, and referenced by immutable IDs/hashes. Raw sensitive logs do not belong in GitHub issues, PRs, retained prompts, or the incident library.
 
-A deployment is not considered proven healthy merely because CI passed. Post-deploy checks should cover the business outcome the application exists to deliver.
+Observations, hypotheses, and verified facts must remain separate. Absence of telemetry is explicitly reported as unknown/degraded evidence coverage.
 
-## Bounded retries
+## Production mitigation
 
-Default maximum: two materially distinct autonomous repair attempts for the same incident fingerprint. Rewording or retrying the same fix does not reset the counter. After the limit, escalate with accumulated evidence.
+Autonomous mitigation is deny-by-default. A project must list each allowed mitigation in `.agentic/platform-ops.json` with:
 
-## Promotion policy target
+- a stable mitigation ID;
+- versioned runbook;
+- reversible action or robust compensating action;
+- deterministic validation command;
+- attempt/time limits;
+- logging/audit trail.
 
-The desired mature loop is:
+Examples include rollback of a compatible bad deployment, bounded retry of a provably idempotent job, disabling a named noncritical feature flag, or scaling a pre-approved worker pool. Direct production SQL and direct customer-data remediation are never autonomous.
 
-`detect → diagnose → repair → test → independent review → merge → deploy → verify → rollback/escalate if necessary`
+## Security and supply chain
 
-The system earns autonomy one risk class at a time. Do not enable universal auto-merge merely because some repairs work well.
+- Pin third-party GitHub Actions to immutable commit SHAs.
+- Use Dependabot/security updates plus deterministic dependency review/audit.
+- Use secret scanning/push protection and static analysis where repository plan/capability permits.
+- Keep `GITHUB_TOKEN` permissions minimal by workflow/job.
+- Keep production credentials environment-scoped and prefer short-lived OIDC credentials.
+- Never put service-role/database/root credentials into browser code or general agent contexts.
+- Control-plane/policy changes are high-risk and require human ownership.
+
+Legacy dependency findings use a security ratchet: baseline exact known advisory IDs with a remediation issue, fail on any new critical advisory, and remove exceptions as they are fixed.
+
+## SLO and error-budget behavior
+
+Projects may start from `slo/defaults.yaml`, then adapt objectives to actual business-critical journeys. Error-budget warning/exhaustion should progressively disable autonomous merging and nonessential release promotion, increase staging/review requirements, and create reliability work. Emergency rollback/restoration remains permitted when its runbook preconditions are satisfied.
+
+## Release and rollback target
+
+The mature delivery flow is:
+
+`PR → policy/risk → deterministic CI/security → preview/integration evidence → independent review → merge → staging → staging synthetics/telemetry → protected production gate → deploy → observation window → promote complete or pre-approved rollback`
+
+Pull-request workflows must not receive production deployment credentials. Production deployments use separate environment-scoped permission and concurrency. Competing production deploys are serialized.
+
+## Learning loop
+
+Curated lessons belong in `incident-library/` and follow `schemas/lesson.schema.json`. Each lesson records symptoms, observations, hypotheses, verified root-cause status, preventive controls, safe mitigation, required human approval, related runbooks/PRs/tests, monitor changes, and confidence.
+
+Material incidents answer the closure questions in `incident-library/README.md`. Future agents may retrieve verified lessons; they must not treat an unresolved hypothesis as policy.
+
+## Autonomy progression
+
+Expand autonomy only after real outcomes demonstrate safety. The initial defaults are:
+
+- auto-create incidents: yes;
+- auto-triage: yes when evidence access is narrow/read-only;
+- auto-create failing reproductions: yes for eligible high-confidence incidents;
+- auto-create test-backed repair PRs: yes within path/blast-radius rules;
+- auto-merge agent PRs: no until independent review and repository enforcement exist;
+- auto-deploy to staging: target yes after CI/review;
+- auto-deploy agent fixes to production: no initially;
+- auto-rollback: yes only through a proven compatible rollback runbook;
+- auto-disable feature flags: only named noncritical flags with a versioned runbook;
+- direct production DB/customer-data changes: never.
+
+The system earns broader autonomy one action and risk class at a time.
