@@ -19,12 +19,17 @@
     "build": "pnpm build",
     "migrationCheck": "",
     "integration": "",
+    "browser": "",
+    "contract": "",
+    "performance": "",
+    "stagingVerify": "",
     "productionVerify": ""
   },
   "risk": {
-    "protectedPathRegex": "^(\\.github/|\\.env|.*(?:^|/)(auth|secret|credential)(?:/|\\.))",
+    "protectedPathRegex": "^(\\.github/|\\.agentic/|\\.env|.*(?:^|/)(auth|billing|payment|security|secret|credential)(?:/|\\.))",
     "maxAutonomousProductionLines": 60,
     "maxRepairAttempts": 2,
+    "unknownRiskDefaultsTo": "high",
     "escalationDomains": [
       "authentication",
       "authorization",
@@ -36,13 +41,23 @@
   },
   "security": {
     "dependencyAuditCommand": "pnpm audit --prod --json",
-    "criticalAdvisoryAllowlist": []
+    "criticalAdvisoryAllowlist": [],
+    "requirePinnedActions": true
   },
   "infrastructure": {
     "deploymentProvider": "",
     "database": "",
     "observability": [],
     "externalSystems": []
+  },
+  "environments": {
+    "development": {"name": "development", "protected": false, "credentials": "none"},
+    "staging": {"name": "staging", "protected": false, "credentials": "environment"},
+    "production": {"name": "production", "protected": true, "credentials": "environment"}
+  },
+  "evidence": {
+    "sources": [],
+    "artifactRetentionDays": 30
   },
   "production": {
     "criticalJourneys": [
@@ -55,10 +70,25 @@
       }
     ]
   },
+  "slo": {
+    "defaultsRef": "iotyndall/agentic-platform-operations/slo/defaults.yaml",
+    "errorBudgetGating": false,
+    "objectives": []
+  },
+  "mitigations": [],
+  "release": {
+    "stagingEnvironment": "staging",
+    "productionEnvironment": "production",
+    "deploymentConcurrencyGroup": "deploy-production",
+    "rollbackRunbook": "runbooks/failed-deployment.md",
+    "requireIndependentReview": true
+  },
   "repair": {
     "enabled": false,
     "minimumConfidence": "high",
     "issueLabel": "auto-triage",
-    "provenanceRegex": ""
+    "provenanceRegex": "",
+    "reproductionRequired": true,
+    "allowedEvidenceKinds": ["unit", "integration", "browser", "contract", "configuration", "synthetic", "performance"]
   }
 }
