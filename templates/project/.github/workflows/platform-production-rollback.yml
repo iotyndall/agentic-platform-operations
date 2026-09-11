@@ -1,0 +1,128 @@
+name: Platform Production Rollback
+
+on:
+  repository_dispatch:
+    types: [agentic-auto-rollback]
+  workflow_dispatch:
+    inputs:
+      incident_issue:
+        required: true
+        type: string
+      current_sha:
+        required: true
+        type: string
+      prior_known_good_sha:
+        required: true
+        type: string
+      mitigation_id:
+        required: true
+        type: string
+      health_failure_count:
+        required: true
+        type: number
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  compatibility:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      compatible: ${{ steps.check.outputs.compatible }}
+      incident_issue: ${{ steps.values.outputs.incident_issue }}
+      current_sha: ${{ steps.values.outputs.current_sha }}
+      prior_sha: ${{ steps.values.outputs.prior_sha }}
+      mitigation_id: ${{ steps.values.outputs.mitigation_id }}
+      failures: ${{ steps.values.outputs.failures }}
+    steps:
+      - id: values
+        shell: bash
+        env:
+          INCIDENT: ${{ github.event.client_payload.incident_issue || inputs.incident_issue }}
+          CURRENT: ${{ github.event.client_payload.current_sha || inputs.current_sha }}
+          PRIOR: ${{ github.event.client_payload.prior_known_good_sha || inputs.prior_known_good_sha }}
+          MITIGATION: ${{ github.event.client_payload.mitigation_id || inputs.mitigation_id }}
+          FAILURES: ${{ github.event.client_payload.health_failure_count || inputs.health_failure_count }}
+        run: |
+          set -euo pipefail
+          echo "incident_issue=$INCIDENT" >> "$GITHUB_OUTPUT"
+          echo "current_sha=$CURRENT" >> "$GITHUB_OUTPUT"
+          echo "prior_sha=$PRIOR" >> "$GITHUB_OUTPUT"
+          echo "mitigation_id=$MITIGATION" >> "$GITHUB_OUTPUT"
+          echo "failures=$FAILURES" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ steps.values.outputs.current_sha }}
+          fetch-depth: 0
+      - id: check
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/platform-ops/check-rollback-compatibility.sh '${{ steps.values.outputs.current_sha }}' '${{ steps.values.outputs.prior_sha }}'
+          echo 'compatible=true' >> "$GITHUB_OUTPUT"
+
+  gate:
+    needs: compatibility
+    permissions:
+      contents: read
+      issues: read
+    uses: iotyndall/agentic-platform-operations/.github/workflows/reusable-rollback-gate.yml@PINNED_REF
+    with:
+      incident_issue: ${{ needs.compatibility.outputs.incident_issue }}
+      current_sha: ${{ needs.compatibility.outputs.current_sha }}
+      prior_known_good_sha: ${{ needs.compatibility.outputs.prior_sha }}
+      mitigation_id: ${{ needs.compatibility.outputs.mitigation_id }}
+      health_failure_count: ${{ fromJSON(needs.compatibility.outputs.failures) }}
+      schema_compatible: ${{ needs.compatibility.outputs.compatible == 'true' }}
+
+  rollback:
+    needs: [compatibility, gate]
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+      deployments: write
+    env:
+      CURRENT_SHA: ${{ needs.compatibility.outputs.current_sha }}
+      PRIOR_SHA: ${{ needs.compatibility.outputs.prior_sha }}
+      PLATFORM_ROLLBACK_TOKEN: ${{ secrets.PLATFORM_ROLLBACK_TOKEN }}
+      PLATFORM_DEPLOY_AUX: ${{ secrets.PLATFORM_DEPLOY_AUX }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ needs.compatibility.outputs.current_sha }}
+      - name: Execute project-specific pre-authorized rollback adapter
+        run: bash scripts/platform-ops/rollback-production.sh "$CURRENT_SHA" "$PRIOR_SHA"
+
+  verify:
+    needs: [compatibility, rollback]
+    permissions:
+      contents: read
+      issues: write
+    uses: iotyndall/agentic-platform-operations/.github/workflows/reusable-post-deploy-verify.yml@PINNED_REF
+    with:
+      candidate_sha: ${{ needs.compatibility.outputs.prior_sha }}
+      target_environment: production
+      environment_name: production
+
+  record:
+    needs: [compatibility, verify]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Record rollback outcome on incident
+        run: |
+          if [ '${{ needs.verify.result }}' = 'success' ]; then
+            gh issue comment '${{ needs.compatibility.outputs.incident_issue }}' --repo "$GITHUB_REPOSITORY" --body "Automated rollback restored production to \`${{ needs.compatibility.outputs.prior_sha }}\` and the configured production verification passed. Root-cause repair remains required."
+          else
+            gh issue comment '${{ needs.compatibility.outputs.incident_issue }}' --repo "$GITHUB_REPOSITORY" --body "Rollback attempt did not produce a passing production verification. Escalate immediately; no autonomous forward fix should be applied directly in production."
+            exit 1
+          fi
