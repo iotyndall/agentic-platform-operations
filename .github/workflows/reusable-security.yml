@@ -59,33 +59,66 @@ jobs:
         run: |
           set -euo pipefail
           set +e
-          bash -euo pipefail -c "$COMMAND" 2>&1 | tee "$RUNNER_TEMP/audit.log"
-          status=${PIPESTATUS[0]}
+          bash -euo pipefail -c "$COMMAND" > "$RUNNER_TEMP/audit.json" 2> "$RUNNER_TEMP/audit.stderr"
+          status=$?
           set -e
+          cat "$RUNNER_TEMP/audit.stderr" >&2 || true
+          cat "$RUNNER_TEMP/audit.json"
 
-          if [ "$status" -eq 0 ]; then
-            echo 'No dependency finding at the configured blocking threshold.'
+          python - "$RUNNER_TEMP/audit.json" "$RUNNER_TEMP/found-critical-ghsa.txt" <<'PY'
+          import json, re, sys
+
+          source, destination = sys.argv[1:]
+          try:
+              with open(source, encoding='utf-8') as f:
+                  data = json.load(f)
+          except Exception as exc:
+              raise SystemExit(f'::error::Dependency audit did not emit parseable JSON: {exc}')
+
+          advisories = data.get('advisories')
+          if not isinstance(advisories, dict):
+              raise SystemExit('::error::Dependency audit JSON has no advisories object; refusing ambiguous security evidence.')
+
+          critical = []
+          malformed = []
+          for advisory in advisories.values():
+              if str(advisory.get('severity', '')).lower() != 'critical':
+                  continue
+              ghsa = advisory.get('github_advisory_id')
+              if not isinstance(ghsa, str) or not re.fullmatch(r'GHSA-[A-Za-z0-9-]+', ghsa):
+                  malformed.append(str(ghsa))
+                  continue
+              critical.append(ghsa)
+
+          if malformed:
+              raise SystemExit('::error::Critical advisories were present without valid GHSA IDs: ' + ', '.join(malformed))
+
+          with open(destination, 'w', encoding='utf-8') as f:
+              for ghsa in sorted(set(critical)):
+                  f.write(ghsa + '\n')
+          PY
+
+          if [ ! -s "$RUNNER_TEMP/found-critical-ghsa.txt" ]; then
+            if [ "$status" -ne 0 ]; then
+              echo '::notice::Dependency audit reported lower-severity findings, but no critical advisories are present.'
+            else
+              echo 'No critical dependency advisories found.'
+            fi
             exit 0
           fi
 
-          grep -Eo 'GHSA-[a-z0-9-]+' "$RUNNER_TEMP/audit.log" | sort -u > "$RUNNER_TEMP/found-ghsa.txt" || true
-          if [ ! -s "$RUNNER_TEMP/found-ghsa.txt" ]; then
-            echo '::error::Dependency audit failed but emitted no recognizable GHSA IDs; refusing to baseline an ambiguous failure.'
-            exit 1
-          fi
-
-          comm -23 "$RUNNER_TEMP/found-ghsa.txt" "$RUNNER_TEMP/allowed-ghsa.txt" > "$RUNNER_TEMP/new-ghsa.txt" || true
-          comm -13 "$RUNNER_TEMP/found-ghsa.txt" "$RUNNER_TEMP/allowed-ghsa.txt" > "$RUNNER_TEMP/stale-allowlist.txt" || true
+          comm -23 "$RUNNER_TEMP/found-critical-ghsa.txt" "$RUNNER_TEMP/allowed-ghsa.txt" > "$RUNNER_TEMP/new-ghsa.txt" || true
+          comm -13 "$RUNNER_TEMP/found-critical-ghsa.txt" "$RUNNER_TEMP/allowed-ghsa.txt" > "$RUNNER_TEMP/stale-allowlist.txt" || true
 
           if [ -s "$RUNNER_TEMP/new-ghsa.txt" ]; then
-            echo '::error::New dependency advisories are outside the project security ratchet:'
+            echo '::error::New critical dependency advisories are outside the project security ratchet:'
             cat "$RUNNER_TEMP/new-ghsa.txt"
             exit 1
           fi
 
-          echo '::warning::Audit failed only for explicitly baselined advisory IDs. Remediation remains required.'
+          echo '::warning::Critical audit findings are limited to explicitly baselined advisory IDs. Remediation remains required.'
           if [ -s "$RUNNER_TEMP/stale-allowlist.txt" ]; then
-            echo '::warning::Some allowlisted advisories were not observed and may be removable:'
+            echo '::warning::Some allowlisted critical advisories were not observed and may be removable:'
             cat "$RUNNER_TEMP/stale-allowlist.txt"
           fi
 
