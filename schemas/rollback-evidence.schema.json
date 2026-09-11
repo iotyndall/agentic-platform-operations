@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/iotyndall/agentic-platform-operations/schemas/rollback-evidence.schema.json",
+  "title": "Rollback Authorization Evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "repository", "incident_issue", "current_sha", "prior_known_good_sha", "mitigation_id", "health_failure_count", "schema_compatible", "ancestor_distance", "authorized", "reasons"],
+  "properties": {
+    "version": {"const": 1},
+    "repository": {"type": "string"},
+    "incident_issue": {"type": "integer", "minimum": 1},
+    "current_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "prior_known_good_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "mitigation_id": {"type": "string", "minLength": 1},
+    "health_failure_count": {"type": "integer", "minimum": 0},
+    "schema_compatible": {"type": "boolean"},
+    "ancestor_distance": {"type": "integer", "minimum": 1},
+    "authorized": {"type": "boolean"},
+    "reasons": {"type": "array", "items": {"type": "string"}}
+  }
+}
