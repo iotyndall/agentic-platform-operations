@@ -60,7 +60,7 @@ jobs:
           set -euo pipefail
           printf '%s' "$TRIAGE" > "$RUNNER_TEMP/triage.json"
           jq -e '.severity and .risk and .recommended_action and .confidence' "$RUNNER_TEMP/triage.json" >/dev/null
-          { echo 'triage_json<<__TRIAGE__'; cat "$RUNNER_TEMP/triage.json"; echo '__TRIAGE__'; } >> "$GITHUB_OUTPUT"
+          { echo 'triage_json<<__TRIAGE__'; cat "$RUNNER_TEMP/triage.json"; echo; echo '__TRIAGE__'; } >> "$GITHUB_OUTPUT"
 
   publish:
     needs: analyze

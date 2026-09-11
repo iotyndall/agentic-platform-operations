@@ -84,7 +84,7 @@ jobs:
           case "$DISP" in PASS|REVISE|ESCALATE) ;; *) exit 1 ;; esac
           case "$RISK" in low|moderate|high|critical) ;; *) exit 1 ;; esac
           if [ "$DISP" = PASS ]; then test "$READY" = true; else test "$READY" = false; fi
-          { echo 'review_json<<__REVIEW__'; cat "$F"; echo '__REVIEW__'; } >> "$GITHUB_OUTPUT"
+          { echo 'review_json<<__REVIEW__'; cat "$F"; echo; echo '__REVIEW__'; } >> "$GITHUB_OUTPUT"
 
   publish:
     needs: analyze
