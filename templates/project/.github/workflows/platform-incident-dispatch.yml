@@ -1,0 +1,18 @@
+name: Platform incident dispatch
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: platform-incident-dispatch
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    uses: iotyndall/agentic-platform-operations/.github/workflows/reusable-incident-dispatcher.yml@PINNED_REF
