@@ -1,0 +1,45 @@
+name: Security incident
+description: Track a security finding without exposing sensitive material
+title: "[Security] "
+labels: ["security-incident"]
+body:
+  - type: markdown
+    attributes:
+      value: "Do not paste credentials, exploit payloads, customer content, session tokens, payment data, or raw sensitive logs into this issue. Use approved evidence references only."
+  - type: input
+    id: component
+    attributes:
+      label: Affected repository / service / component
+    validations:
+      required: true
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options: ["Critical", "High", "Moderate", "Low", "Unknown"]
+    validations:
+      required: true
+  - type: textarea
+    id: exposure
+    attributes:
+      label: Exposure surface
+      description: Describe what may be affected without including exploit instructions or sensitive values.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Scanner/evidence references
+      description: Advisory IDs, scanner finding IDs, redacted artifact references, affected versions.
+    validations:
+      required: true
+  - type: textarea
+    id: containment
+    attributes:
+      label: Containment / rotation requirements
+      description: Identify proposed actions and which require human authorization.
+  - type: textarea
+    id: remediation
+    attributes:
+      label: Remediation plan
+      description: Smallest safe patch or dependency change, verification, and rollback.

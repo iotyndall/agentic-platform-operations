@@ -1,0 +1,104 @@
+{
+  "version": 1,
+  "project": {
+    "name": "Mesa Direct",
+    "repository": "iotyndall/mesa-direct",
+    "defaultBranch": "main",
+    "autonomyLevel": 1
+  },
+  "runtime": {
+    "kind": "node",
+    "nodeVersion": "22",
+    "packageManager": "pnpm"
+  },
+  "commands": {
+    "install": "pnpm install --frozen-lockfile",
+    "typecheck": "pnpm exec tsc --noEmit",
+    "test": "",
+    "lint": "pnpm exec next lint",
+    "build": "pnpm build",
+    "migrationCheck": "bash .agentic/check-migrations.sh",
+    "integration": "",
+    "browser": "",
+    "contract": "",
+    "performance": "",
+    "stagingVerify": "",
+    "productionVerify": "node scripts/booking-health.mjs"
+  },
+  "risk": {
+    "protectedPathRegex": "^(\\.github/|\\.agentic/|\\.env|scripts/migrations/|drizzle\\.config\\.|middleware\\.)|(^|/)(auth|payment|security|secret|credential)(/|\\.)",
+    "maxAutonomousProductionLines": 60,
+    "maxRepairAttempts": 2,
+    "unknownRiskDefaultsTo": "high",
+    "escalationDomains": [
+      "authentication",
+      "authorization",
+      "secrets",
+      "destructive-data",
+      "irreversible-migrations",
+      "payments",
+      "booking-provider-mapping"
+    ]
+  },
+  "security": {
+    "dependencyAuditCommand": "pnpm audit --prod --json",
+    "criticalAdvisoryAllowlist": [
+      "GHSA-p293-qw3h-jr36",
+      "GHSA-2xp9-vwfh-vxw4"
+    ],
+    "requirePinnedActions": true
+  },
+  "infrastructure": {
+    "deploymentProvider": "Vercel",
+    "database": "Postgres/Drizzle",
+    "observability": ["GitHub Actions", "Vercel"],
+    "externalSystems": ["Hospitable Direct Booking"]
+  },
+  "environments": {
+    "development": {"name": "development", "protected": false, "credentials": "none"},
+    "staging": {"name": "staging", "protected": false, "credentials": "none"},
+    "production": {"name": "production", "protected": true, "credentials": "environment"}
+  },
+  "evidence": {
+    "sources": [
+      {"id": "vercel", "kind": "deployments", "redactionRequired": true, "customerContentAllowed": false},
+      {"id": "booking-synthetic", "kind": "synthetics", "redactionRequired": false, "customerContentAllowed": false},
+      {"id": "github-actions", "kind": "other", "redactionRequired": true, "customerContentAllowed": false}
+    ],
+    "artifactRetentionDays": 30
+  },
+  "production": {
+    "criticalJourneys": [
+      {
+        "id": "direct-booking-handoff",
+        "description": "Every directly bookable public property site loads, renders the exact expected Hospitable widget mapping, and can reach Hospitable without TLS/connection/5xx failure.",
+        "owner": "local",
+        "command": "node scripts/booking-health.mjs",
+        "severityOnFailure": "P1"
+      }
+    ]
+  },
+  "slo": {
+    "defaultsRef": "iotyndall/agentic-platform-operations/slo/defaults.yaml",
+    "errorBudgetGating": false,
+    "objectives": [
+      {"id": "booking-path-availability", "target": 0.999, "windowDays": 30, "description": "Successful property-site to Hospitable booking handoff checks."}
+    ]
+  },
+  "mitigations": [],
+  "release": {
+    "stagingEnvironment": "staging",
+    "productionEnvironment": "production",
+    "deploymentConcurrencyGroup": "deploy-production-mesa",
+    "rollbackRunbook": "runbooks/failed-deployment.md",
+    "requireIndependentReview": true
+  },
+  "repair": {
+    "enabled": false,
+    "minimumConfidence": "high",
+    "issueLabel": "auto-triage",
+    "provenanceRegex": "",
+    "reproductionRequired": true,
+    "allowedEvidenceKinds": ["unit", "integration", "browser", "contract", "configuration", "synthetic"]
+  }
+}

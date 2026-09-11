@@ -1,0 +1,79 @@
+name: Reusable pre-authorized mitigation gate
+
+on:
+  workflow_call:
+    inputs:
+      incident_issue:
+        required: true
+        type: string
+      mitigation_id:
+        required: true
+        type: string
+      attempt_number:
+        required: true
+        type: number
+      config_path:
+        required: false
+        type: string
+        default: '.agentic/platform-ops.json'
+    outputs:
+      authorized:
+        value: ${{ jobs.gate.outputs.authorized }}
+      mitigation_type:
+        value: ${{ jobs.gate.outputs.mitigation_type }}
+      validation_command:
+        value: ${{ jobs.gate.outputs.validation_command }}
+
+permissions:
+  contents: read
+  issues: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    outputs:
+      authorized: ${{ steps.gate.outputs.authorized }}
+      mitigation_type: ${{ steps.gate.outputs.mitigation_type }}
+      validation_command: ${{ steps.gate.outputs.validation_command }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      INCIDENT_ISSUE: ${{ inputs.incident_issue }}
+      MITIGATION_ID: ${{ inputs.mitigation_id }}
+      ATTEMPT_NUMBER: ${{ inputs.attempt_number }}
+      CONFIG_PATH: ${{ inputs.config_path }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          submodules: false
+
+      - name: Authorize only explicitly declared reversible non-destructive mitigations
+        id: gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f "$CONFIG_PATH"
+          gh issue view "$INCIDENT_ISSUE" --json state,labels,body > "$RUNNER_TEMP/incident.json"
+          jq -e '.state == "OPEN" and ([.labels[].name] | index("kind:incident") != null)' "$RUNNER_TEMP/incident.json" >/dev/null || {
+            echo '::error::Mitigation requires an open canonical incident.'; exit 1
+          }
+
+          jq -e --arg id "$MITIGATION_ID" 'any(.mitigations[]?;
+            .id==$id and
+            (.type=="retry-idempotent-job" or .type=="disable-feature-flag" or .type=="scale-worker") and
+            .autonomousAllowed==true and .reversible==true and
+            (.runbook|length>0) and (.validationCommand|length>0)
+          )' "$CONFIG_PATH" >/dev/null || {
+            echo '::error::Mitigation is not an explicitly pre-authorized reversible action.'; exit 1
+          }
+
+          TYPE="$(jq -r --arg id "$MITIGATION_ID" '.mitigations[] | select(.id==$id) | .type' "$CONFIG_PATH")"
+          MAX="$(jq -r --arg id "$MITIGATION_ID" '.mitigations[] | select(.id==$id) | (.maxAttempts // 1)' "$CONFIG_PATH")"
+          ATTEMPT="$(printf '%.0f' "$ATTEMPT_NUMBER")"
+          test "$ATTEMPT" -ge 1 && test "$ATTEMPT" -le "$MAX" || { echo "::error::Mitigation attempt $ATTEMPT exceeds configured max $MAX"; exit 1; }
+          COMMAND="$(jq -r --arg id "$MITIGATION_ID" '.mitigations[] | select(.id==$id) | .validationCommand' "$CONFIG_PATH")"
+          printf '%s' "$COMMAND" | grep -q $'\n' && { echo '::error::Validation command must be single-line'; exit 1; } || true
+
+          echo 'authorized=true' >> "$GITHUB_OUTPUT"
+          echo "mitigation_type=$TYPE" >> "$GITHUB_OUTPUT"
+          echo "validation_command=$COMMAND" >> "$GITHUB_OUTPUT"

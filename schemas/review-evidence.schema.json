@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/iotyndall/agentic-platform-operations/schemas/review-evidence.schema.json",
+  "title": "Independent Engineering Review Evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "repository", "pull_request", "reviewed_head_sha", "disposition", "risk", "findings", "missing_tests", "security_concerns", "rollback_concerns", "summary"],
+  "properties": {
+    "version": {"const": 1},
+    "repository": {"type": "string", "pattern": "^[^/]+/[^/]+$"},
+    "pull_request": {"type": "integer", "minimum": 1},
+    "reviewed_head_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "disposition": {"enum": ["PASS", "REVISE", "ESCALATE"]},
+    "risk": {"enum": ["low", "moderate", "high", "critical"]},
+    "findings": {"type": "array", "items": {"type": "string"}},
+    "missing_tests": {"type": "array", "items": {"type": "string"}},
+    "security_concerns": {"type": "array", "items": {"type": "string"}},
+    "rollback_concerns": {"type": "array", "items": {"type": "string"}},
+    "summary": {"type": "string", "minLength": 1},
+    "engineering_ready": {"type": "boolean"}
+  }
+}

@@ -1,0 +1,77 @@
+name: Reusable evidence metadata bundle
+
+on:
+  workflow_call:
+    inputs:
+      evidence_json:
+        description: 'Evidence metadata/references only; raw customer or credential-bearing production content is prohibited'
+        required: true
+        type: string
+      retention_days:
+        required: false
+        type: number
+        default: 30
+    outputs:
+      bundle_sha256:
+        value: ${{ jobs.bundle.outputs.bundle_sha256 }}
+      bundle_id:
+        value: ${{ jobs.bundle.outputs.bundle_id }}
+
+permissions:
+  contents: read
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      bundle_sha256: ${{ steps.validate.outputs.bundle_sha256 }}
+      bundle_id: ${{ steps.validate.outputs.bundle_id }}
+    env:
+      EVIDENCE_JSON: ${{ inputs.evidence_json }}
+    steps:
+      - name: Canonicalize and fail closed on unsafe evidence metadata
+        id: validate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import hashlib, json, os, re
+          from pathlib import Path
+
+          d=json.loads(os.environ['EVIDENCE_JSON'])
+          for key in ('bundleId','incidentId','createdAt','scope','artifacts','handling'):
+              if key not in d: raise SystemExit(f'missing evidence field {key}')
+          if not str(d['incidentId']).startswith('INC-'): raise SystemExit('invalid incidentId')
+          artifacts=d.get('artifacts')
+          if not isinstance(artifacts,list) or not artifacts: raise SystemExit('at least one evidence artifact reference required')
+          h=d.get('handling') or {}
+          if h.get('secretsScrubbed') is not True or h.get('customerDataScrubbed') is not True:
+              raise SystemExit('evidence handling must assert secrets/customer data scrubbed')
+          for a in artifacts:
+              if a.get('containsCustomerContent') is not False:
+                  raise SystemExit('customer content is prohibited from autonomous GitHub evidence bundles')
+              if a.get('redactionStatus') not in {'redacted','not-needed'}:
+                  raise SystemExit('blocked/unreviewed artifact cannot enter bundle')
+              if not re.fullmatch(r'[0-9a-f]{64}', str(a.get('sha256',''))):
+                  raise SystemExit('every evidence reference requires an immutable SHA-256')
+              if len(str(a.get('reference',''))) > 500 or len(str(a.get('summary',''))) > 1000:
+                  raise SystemExit('evidence metadata exceeds narrow context limits')
+
+          canonical=json.dumps(d,separators=(',',':'),sort_keys=True)
+          suspicious=[r'(?i)authorization\s*[:=]\s*bearer\s+\S+',r'\bAKIA[0-9A-Z]{16}\b',r'\bgh[pousr]_[A-Za-z0-9_]{20,}\b',r'\bsk-[A-Za-z0-9_-]{20,}\b',r'eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}']
+          if any(re.search(p,canonical) for p in suspicious): raise SystemExit('evidence metadata appears to contain a credential/token')
+          out=Path(os.environ['RUNNER_TEMP'])/'evidence-bundle.json'
+          out.write_text(json.dumps(d,indent=2,sort_keys=True)+'\n')
+          digest=hashlib.sha256(canonical.encode()).hexdigest()
+          print(f'bundle_sha256={digest}')
+          print(f'bundle_id={d["bundleId"]}')
+          PY
+
+      - name: Persist metadata-only evidence artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: evidence-${{ steps.validate.outputs.bundle_id }}-${{ steps.validate.outputs.bundle_sha256 }}
+          path: ${{ runner.temp }}/evidence-bundle.json
+          retention-days: ${{ inputs.retention_days }}
+          if-no-files-found: error

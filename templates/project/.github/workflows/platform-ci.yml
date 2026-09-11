@@ -1,0 +1,18 @@
+name: Platform CI
+
+on:
+  pull_request:
+  merge_group:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: platform-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    uses: iotyndall/agentic-platform-operations/.github/workflows/reusable-node-ci.yml@PINNED_REF

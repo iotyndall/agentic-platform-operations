@@ -1,0 +1,180 @@
+name: Reusable deterministic Node CI
+
+on:
+  workflow_call:
+    inputs:
+      config_path:
+        description: 'Project-local operations contract'
+        required: false
+        type: string
+        default: '.agentic/platform-ops.json'
+      checkout_ref:
+        description: 'Optional exact caller-repository ref/SHA to verify; defaults to the workflow event SHA'
+        required: false
+        type: string
+        default: ''
+      timeout_minutes:
+        description: 'Verification job timeout'
+        required: false
+        type: number
+        default: 20
+    outputs:
+      verified_sha:
+        description: 'Exact caller-repository SHA that passed all configured deterministic checks'
+        value: ${{ jobs.verify.outputs.verified_sha }}
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      node_version: ${{ steps.read.outputs.node_version }}
+      package_manager: ${{ steps.read.outputs.package_manager }}
+      install: ${{ steps.read.outputs.install }}
+      typecheck: ${{ steps.read.outputs.typecheck }}
+      test: ${{ steps.read.outputs.test }}
+      lint: ${{ steps.read.outputs.lint }}
+      build: ${{ steps.read.outputs.build }}
+      migration_check: ${{ steps.read.outputs.migration_check }}
+      integration: ${{ steps.read.outputs.integration }}
+      contract_test: ${{ steps.read.outputs.contract_test }}
+      browser: ${{ steps.read.outputs.browser }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
+          submodules: false
+
+      - name: Validate and read project contract
+        id: read
+        shell: bash
+        env:
+          CONFIG_PATH: ${{ inputs.config_path }}
+        run: |
+          set -euo pipefail
+          test -f "$CONFIG_PATH" || { echo "::error::Missing $CONFIG_PATH"; exit 1; }
+          jq -e '.version == 1' "$CONFIG_PATH" >/dev/null
+          jq -e --arg repo "$GITHUB_REPOSITORY" '.project.repository == $repo' "$CONFIG_PATH" >/dev/null || {
+            echo "::error::project.repository must equal $GITHUB_REPOSITORY"
+            exit 1
+          }
+          jq -e '.commands.install | type == "string" and length > 0' "$CONFIG_PATH" >/dev/null
+          jq -e '.commands.build | type == "string" and length > 0' "$CONFIG_PATH" >/dev/null
+
+          emit() {
+            local key="$1" jq_expr="$2" value
+            value="$(jq -r "$jq_expr // \"\"" "$CONFIG_PATH")"
+            if printf '%s' "$value" | grep -q $'\n'; then
+              echo "::error::Contract command $key must be a single line"
+              exit 1
+            fi
+            printf '%s=%s\n' "$key" "$value" >> "$GITHUB_OUTPUT"
+          }
+
+          emit node_version '.runtime.nodeVersion'
+          emit package_manager '.runtime.packageManager'
+          emit install '.commands.install'
+          emit typecheck '.commands.typecheck'
+          emit test '.commands.test'
+          emit lint '.commands.lint'
+          emit build '.commands.build'
+          emit migration_check '.commands.migrationCheck'
+          emit integration '.commands.integration'
+          emit contract_test '.commands.contract'
+          emit browser '.commands.browser'
+
+  verify:
+    needs: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    outputs:
+      verified_sha: ${{ steps.attest.outputs.verified_sha }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
+          submodules: false
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        if: needs.contract.outputs.package_manager == 'pnpm'
+        with:
+          version: 10
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        if: needs.contract.outputs.node_version != ''
+        with:
+          node-version: ${{ needs.contract.outputs.node_version }}
+
+      - name: Install
+        shell: bash
+        env:
+          COMMAND: ${{ needs.contract.outputs.install }}
+        run: bash -euo pipefail -c "$COMMAND"
+
+      - name: Type check
+        if: needs.contract.outputs.typecheck != ''
+        shell: bash
+        env:
+          COMMAND: ${{ needs.contract.outputs.typecheck }}
+        run: bash -euo pipefail -c "$COMMAND"
+
+      - name: Unit/test suite
+        if: needs.contract.outputs.test != ''
+        shell: bash
+        env:
+          COMMAND: ${{ needs.contract.outputs.test }}
+        run: bash -euo pipefail -c "$COMMAND"
+
+      - name: Lint
+        if: needs.contract.outputs.lint != ''
+        shell: bash
+        env:
+          COMMAND: ${{ needs.contract.outputs.lint }}
+        run: bash -euo pipefail -c "$COMMAND"
+
+      - name: Build
+        shell: bash
+        env:
+          COMMAND: ${{ needs.contract.outputs.build }}
+          NEXT_TELEMETRY_DISABLED: '1'
+        run: bash -euo pipefail -c "$COMMAND"
+
+      - name: Migration/schema check
+        if: needs.contract.outputs.migration_check != ''
+        shell: bash
+        env:
+          COMMAND: ${{ needs.contract.outputs.migration_check }}
+        run: bash -euo pipefail -c "$COMMAND"
+
+      - name: Integration checks
+        if: needs.contract.outputs.integration != ''
+        shell: bash
+        env:
+          COMMAND: ${{ needs.contract.outputs.integration }}
+        run: bash -euo pipefail -c "$COMMAND"
+
+      - name: External API/webhook contract checks
+        if: needs.contract.outputs.contract_test != ''
+        shell: bash
+        env:
+          COMMAND: ${{ needs.contract.outputs.contract_test }}
+        run: bash -euo pipefail -c "$COMMAND"
+
+      - name: Browser/E2E checks
+        if: needs.contract.outputs.browser != ''
+        shell: bash
+        env:
+          COMMAND: ${{ needs.contract.outputs.browser }}
+        run: bash -euo pipefail -c "$COMMAND"
+
+      - name: Attest exact verified SHA
+        id: attest
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHA="$(git rev-parse HEAD)"
+          echo "verified_sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "Deterministic verification attests caller-repository SHA $SHA."

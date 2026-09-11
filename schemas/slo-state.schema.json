@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/iotyndall/agentic-platform-operations/schemas/slo-state.schema.json",
+  "title": "Release-time SLO State",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "observed_at", "environment", "status", "objectives"],
+  "properties": {
+    "version": {"const": 1},
+    "observed_at": {"type": "string", "format": "date-time"},
+    "environment": {"enum": ["staging", "production"]},
+    "status": {"enum": ["healthy", "caution", "exhausted", "unknown"]},
+    "objectives": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "target", "good_events", "total_events", "budget_consumed_ratio", "status"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "target": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+          "good_events": {"type": "integer", "minimum": 0},
+          "total_events": {"type": "integer", "minimum": 0},
+          "budget_consumed_ratio": {"type": ["number", "null"], "minimum": 0},
+          "status": {"enum": ["healthy", "caution", "exhausted", "unknown"]},
+          "source": {"type": "string"}
+        }
+      }
+    },
+    "notes": {"type": "array", "items": {"type": "string"}}
+  }
+}

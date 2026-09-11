@@ -1,0 +1,38 @@
+name: Reliability improvement
+description: Durable engineering work from an incident, SLO breach, or resilience gap
+title: "[Reliability] "
+labels: ["reliability"]
+body:
+  - type: input
+    id: source
+    attributes:
+      label: Source incident / SLO / finding
+    validations:
+      required: true
+  - type: textarea
+    id: gap
+    attributes:
+      label: Reliability gap
+      description: What detection, prevention, mitigation, rollback, test, or observability capability is missing?
+    validations:
+      required: true
+  - type: dropdown
+    id: asset
+    attributes:
+      label: Primary durable improvement
+      options: ["Regression test", "Monitor/alert", "Runbook", "Rollback capability", "Observability", "Architecture/ADR", "Security control", "Other"]
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance evidence
+      description: Define the executable check or measurable signal that proves the improvement works.
+    validations:
+      required: true
+  - type: textarea
+    id: risk
+    attributes:
+      label: Operational risk and rollback
+    validations:
+      required: true

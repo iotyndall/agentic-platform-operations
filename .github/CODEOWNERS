@@ -1,0 +1,9 @@
+# Control-plane changes have cross-project blast radius and require explicit human ownership.
+/.github/agent-policy.md @iotyndall
+/.github/workflows/ @iotyndall
+/schemas/ @iotyndall
+/scripts/validate_contract.py @iotyndall
+/runbooks/ @iotyndall
+/slo/ @iotyndall
+/agents/ @iotyndall
+/templates/project/.github/workflows/ @iotyndall

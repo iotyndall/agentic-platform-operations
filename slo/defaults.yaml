@@ -1,0 +1,39 @@
+version: 1
+
+objectives:
+  availability:
+    target: 0.999
+    window_days: 30
+    description: Successful valid customer-facing requests or critical synthetic journeys.
+  latency:
+    percentile: 95
+    threshold_ms: 1500
+    window_days: 30
+    description: Core customer-facing request completion time.
+  webhook:
+    target: 0.995
+    deadline_seconds: 300
+    window_days: 30
+    description: Valid webhook deliveries completed successfully within deadline.
+  critical_job:
+    target: 0.99
+    window_days: 30
+    description: Critical scheduled jobs complete by their project-defined deadline.
+
+error_budget_policy:
+  warning_remaining_fraction: 0.25
+  exhausted_remaining_fraction: 0.0
+  when_warning:
+    - require_staging_evidence
+    - disable_green_auto_merge_for_affected_service
+  when_exhausted:
+    - pause_nonessential_releases
+    - disable_auto_merge_for_affected_service
+    - require_release_approval
+    - open_reliability_work_item
+    - prioritize_root_cause_and_observability_gaps
+
+notes:
+  - Projects must adapt these defaults to their actual critical journeys and traffic patterns.
+  - Unknown or missing telemetry must be reported as unknown, never treated as healthy.
+  - Error-budget gates should not block an emergency rollback or other pre-authorized service-restoration action.

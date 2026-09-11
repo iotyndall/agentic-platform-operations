@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/iotyndall/agentic-platform-operations/schemas/triage-evidence.schema.json",
+  "title": "Incident Triage Evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "incident_issue", "severity", "customer_impact", "observations", "hypotheses", "evidence_gaps", "risk", "recommended_action", "reproduction_candidate", "confidence"],
+  "properties": {
+    "version": {"const": 1},
+    "incident_issue": {"type": "integer", "minimum": 1},
+    "severity": {"enum": ["SEV-1", "SEV-2", "SEV-3", "SEV-4"]},
+    "customer_impact": {"type": "string"},
+    "observations": {"type": "array", "items": {"type": "string"}},
+    "hypotheses": {"type": "array", "items": {"type": "string"}},
+    "evidence_gaps": {"type": "array", "items": {"type": "string"}},
+    "risk": {"enum": ["low", "moderate", "high", "critical"]},
+    "recommended_action": {"enum": ["observe", "mitigate", "reproduce", "escalate", "external-dependency"]},
+    "reproduction_candidate": {"type": "boolean"},
+    "confidence": {"enum": ["low", "medium", "high"]},
+    "runbook": {"type": ["string", "null"]},
+    "summary": {"type": "string"}
+  }
+}

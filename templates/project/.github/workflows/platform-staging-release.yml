@@ -1,0 +1,65 @@
+name: Platform Staging Release
+
+on:
+  pull_request:
+    types: [closed]
+
+concurrency:
+  group: deploy-staging-${{ github.event.pull_request.merge_commit_sha }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    if: github.event.pull_request.merged == true
+    uses: iotyndall/agentic-platform-operations/.github/workflows/reusable-node-ci.yml@PINNED_REF
+    with:
+      checkout_ref: ${{ github.event.pull_request.merge_commit_sha }}
+
+  gate:
+    if: github.event.pull_request.merged == true
+    needs: ci
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    uses: iotyndall/agentic-platform-operations/.github/workflows/reusable-release-gate.yml@PINNED_REF
+    with:
+      pull_request_number: ${{ github.event.pull_request.number }}
+      candidate_sha: ${{ github.event.pull_request.merge_commit_sha }}
+      reviewed_head_sha: ${{ github.event.pull_request.head.sha }}
+      ci_verified_sha: ${{ needs.ci.outputs.verified_sha }}
+      target_environment: staging
+      environment_name: staging
+
+  deploy:
+    if: github.event.pull_request.merged == true
+    needs: gate
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+      id-token: write
+      deployments: write
+    env:
+      CANDIDATE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+      PLATFORM_DEPLOY_TOKEN: ${{ secrets.PLATFORM_DEPLOY_TOKEN }}
+      PLATFORM_DEPLOY_AUX: ${{ secrets.PLATFORM_DEPLOY_AUX }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+      - name: Project-specific staging deployment adapter
+        run: bash scripts/platform-ops/deploy-staging.sh "$CANDIDATE_SHA"
+
+  verify:
+    if: github.event.pull_request.merged == true
+    needs: deploy
+    permissions:
+      contents: read
+      issues: write
+    uses: iotyndall/agentic-platform-operations/.github/workflows/reusable-post-deploy-verify.yml@PINNED_REF
+    with:
+      pull_request_number: ${{ github.event.pull_request.number }}
+      candidate_sha: ${{ github.event.pull_request.merge_commit_sha }}
+      target_environment: staging
+      environment_name: staging

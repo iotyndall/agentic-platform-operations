@@ -1,0 +1,70 @@
+name: Production incident
+description: Structured runtime reliability incident
+title: "[Incident] "
+labels: ["incident"]
+body:
+  - type: input
+    id: service
+    attributes:
+      label: Service / critical journey
+    validations:
+      required: true
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options: ["SEV-1", "SEV-2", "SEV-3", "SEV-4"]
+    validations:
+      required: true
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Environment
+      options: ["production", "staging", "development"]
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Customer-visible impact
+      description: State observed behavior and estimated scope; do not include customer content or secrets.
+    validations:
+      required: true
+  - type: textarea
+    id: signal
+    attributes:
+      label: Detection signal and time window
+      description: Include monitor/source, timestamps, SLO/SLI if relevant, and observation coverage.
+    validations:
+      required: true
+  - type: input
+    id: current_sha
+    attributes:
+      label: Current deployment SHA
+    validations:
+      required: true
+  - type: input
+    id: prior_sha
+    attributes:
+      label: Prior known-good SHA
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Redacted evidence references
+      description: Links/immutable IDs only; do not paste raw secrets or customer data.
+    validations:
+      required: true
+  - type: textarea
+    id: hypothesis
+    attributes:
+      label: Current hypotheses
+      description: Keep hypotheses distinct from verified facts.
+  - type: input
+    id: runbook
+    attributes:
+      label: Relevant runbook
+  - type: textarea
+    id: mitigation
+    attributes:
+      label: Authorized mitigation status
+      description: State whether any pre-approved reversible mitigation is available and whether its preconditions are satisfied.

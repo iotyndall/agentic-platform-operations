@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/iotyndall/agentic-platform-operations/schemas/feature-spec.schema.json",
+  "title": "Agentic Product Feature Specification",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["issue_kind", "problem", "desired_outcome", "actors", "current_behavior", "proposed_behavior", "acceptance_criteria", "scope", "non_goals", "edge_cases", "impacts", "risk", "tests", "critical_journeys", "rollout", "rollback", "success_metrics", "assumptions", "open_questions"],
+  "properties": {
+    "issue_kind": {"const": "feature"},
+    "problem": {"type": "string", "minLength": 1},
+    "desired_outcome": {"type": "string", "minLength": 1},
+    "actors": {"type": "array", "minItems": 1, "items": {"type": "object", "required": ["actor", "job_to_be_done"], "additionalProperties": false, "properties": {"actor": {"type": "string"}, "job_to_be_done": {"type": "string"}}}},
+    "current_behavior": {"type": "string"},
+    "proposed_behavior": {"type": "string", "minLength": 1},
+    "acceptance_criteria": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "scope": {"type": "array", "items": {"type": "string"}},
+    "non_goals": {"type": "array", "items": {"type": "string"}},
+    "ux_flow": {"type": "array", "items": {"type": "string"}},
+    "business_rules": {"type": "array", "items": {"type": "string"}},
+    "edge_cases": {"type": "array", "items": {"type": "string"}},
+    "impacts": {"type": "object", "additionalProperties": false, "required": ["data", "api", "integrations", "security", "privacy", "tenancy", "operations"], "properties": {"data": {"type": "array", "items": {"type": "string"}}, "api": {"type": "array", "items": {"type": "string"}}, "integrations": {"type": "array", "items": {"type": "string"}}, "security": {"type": "array", "items": {"type": "string"}}, "privacy": {"type": "array", "items": {"type": "string"}}, "tenancy": {"type": "array", "items": {"type": "string"}}, "operations": {"type": "array", "items": {"type": "string"}}}},
+    "risk": {"type": "object", "additionalProperties": false, "required": ["level", "rationale"], "properties": {"level": {"enum": ["low", "moderate", "high", "critical"]}, "rationale": {"type": "string"}}},
+    "tests": {"type": "array", "minItems": 1, "items": {"enum": ["unit", "integration", "browser", "contract", "configuration", "synthetic", "performance", "manual"]}},
+    "critical_journeys": {"type": "array", "items": {"type": "string"}},
+    "rollout": {"type": "array", "items": {"type": "string"}},
+    "rollback": {"type": "array", "items": {"type": "string"}},
+    "success_metrics": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+    "verified_facts": {"type": "array", "items": {"type": "string"}},
+    "assumptions": {"type": "array", "items": {"type": "string"}},
+    "open_questions": {"type": "array", "items": {"type": "string"}}
+  }
+}

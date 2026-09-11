@@ -1,0 +1,94 @@
+{
+  "version": 1,
+  "project": {
+    "name": "REPLACE_ME",
+    "repository": "OWNER/REPOSITORY",
+    "defaultBranch": "main",
+    "autonomyLevel": 1
+  },
+  "runtime": {
+    "kind": "node",
+    "nodeVersion": "22",
+    "packageManager": "pnpm"
+  },
+  "commands": {
+    "install": "pnpm install --frozen-lockfile",
+    "typecheck": "pnpm type-check",
+    "test": "pnpm test",
+    "lint": "pnpm lint",
+    "build": "pnpm build",
+    "migrationCheck": "",
+    "integration": "",
+    "browser": "",
+    "contract": "",
+    "performance": "",
+    "stagingVerify": "",
+    "productionVerify": ""
+  },
+  "risk": {
+    "protectedPathRegex": "^(\\.github/|\\.agentic/|\\.env|.*(?:^|/)(auth|billing|payment|security|secret|credential)(?:/|\\.))",
+    "maxAutonomousProductionLines": 60,
+    "maxRepairAttempts": 2,
+    "unknownRiskDefaultsTo": "high",
+    "escalationDomains": [
+      "authentication",
+      "authorization",
+      "secrets",
+      "destructive-data",
+      "irreversible-migrations",
+      "payments"
+    ]
+  },
+  "security": {
+    "dependencyAuditCommand": "pnpm audit --prod --json",
+    "criticalAdvisoryAllowlist": [],
+    "requirePinnedActions": true
+  },
+  "infrastructure": {
+    "deploymentProvider": "",
+    "database": "",
+    "observability": [],
+    "externalSystems": []
+  },
+  "environments": {
+    "development": {"name": "development", "protected": false, "credentials": "none"},
+    "staging": {"name": "staging", "protected": false, "credentials": "environment"},
+    "production": {"name": "production", "protected": true, "credentials": "environment"}
+  },
+  "evidence": {
+    "sources": [],
+    "artifactRetentionDays": 30
+  },
+  "production": {
+    "criticalJourneys": [
+      {
+        "id": "primary-user-outcome",
+        "description": "Replace with the business outcome that must remain healthy after deployment.",
+        "owner": "local",
+        "command": "",
+        "severityOnFailure": "P1"
+      }
+    ]
+  },
+  "slo": {
+    "defaultsRef": "iotyndall/agentic-platform-operations/slo/defaults.yaml",
+    "errorBudgetGating": false,
+    "objectives": []
+  },
+  "mitigations": [],
+  "release": {
+    "stagingEnvironment": "staging",
+    "productionEnvironment": "production",
+    "deploymentConcurrencyGroup": "deploy-production",
+    "rollbackRunbook": "runbooks/failed-deployment.md",
+    "requireIndependentReview": true
+  },
+  "repair": {
+    "enabled": false,
+    "minimumConfidence": "high",
+    "issueLabel": "auto-triage",
+    "provenanceRegex": "",
+    "reproductionRequired": true,
+    "allowedEvidenceKinds": ["unit", "integration", "browser", "contract", "configuration", "synthetic", "performance"]
+  }
+}

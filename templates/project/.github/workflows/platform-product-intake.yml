@@ -1,0 +1,24 @@
+name: Platform product intake
+
+on:
+  repository_dispatch:
+    types: [agentic-product-intake]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'Feature issue number'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  product:
+    uses: iotyndall/agentic-platform-operations/.github/workflows/reusable-product-intake.yml@PINNED_REF
+    with:
+      issue_number: ${{ github.event.client_payload.issue_number || inputs.issue_number }}
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

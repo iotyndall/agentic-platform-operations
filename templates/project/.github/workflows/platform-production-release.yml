@@ -1,0 +1,125 @@
+name: Platform Production Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      pull_request_number:
+        description: 'Merged PR supplying the release'
+        required: true
+        type: string
+      candidate_sha:
+        description: 'Exact current main/default-branch SHA to release'
+        required: true
+        type: string
+      reviewed_head_sha:
+        description: 'Exact PR head SHA independently reviewed before merge'
+        required: true
+        type: string
+      manual_high_risk_release:
+        description: 'Set only after explicit human review for a HIGH-risk change. CRITICAL remains blocked.'
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    uses: iotyndall/agentic-platform-operations/.github/workflows/reusable-node-ci.yml@PINNED_REF
+    with:
+      checkout_ref: ${{ inputs.candidate_sha }}
+
+  config:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      slo_enabled: ${{ steps.config.outputs.slo_enabled }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.candidate_sha }}
+      - id: config
+        run: echo "slo_enabled=$(jq -r '.slo.errorBudgetGating // false' .agentic/platform-ops.json)" >> "$GITHUB_OUTPUT"
+
+  collect-slo:
+    needs: config
+    if: needs.config.outputs.slo_enabled == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      slo_json: ${{ steps.collect.outputs.slo_json }}
+    env:
+      PLATFORM_OBSERVABILITY_TOKEN: ${{ secrets.PLATFORM_OBSERVABILITY_TOKEN }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.candidate_sha }}
+      - id: collect
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/platform-ops/collect-slo.sh > "$RUNNER_TEMP/slo.json"
+          jq -e '.environment == "production" and (.objectives|type=="array" and length>0)' "$RUNNER_TEMP/slo.json" >/dev/null
+          echo "slo_json=$(jq -c . "$RUNNER_TEMP/slo.json")" >> "$GITHUB_OUTPUT"
+          rm -f "$RUNNER_TEMP/slo.json"
+
+  slo:
+    needs: [config, collect-slo]
+    if: needs.config.outputs.slo_enabled == 'true' && needs.collect-slo.result == 'success'
+    uses: iotyndall/agentic-platform-operations/.github/workflows/reusable-slo-evaluator.yml@PINNED_REF
+    with:
+      slo_input_json: ${{ needs.collect-slo.outputs.slo_json }}
+
+  gate:
+    needs: [ci, config, collect-slo, slo]
+    if: always() && needs.ci.result == 'success' && needs.config.result == 'success' && (needs.config.outputs.slo_enabled != 'true' || needs.slo.result == 'success')
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    uses: iotyndall/agentic-platform-operations/.github/workflows/reusable-release-gate.yml@PINNED_REF
+    with:
+      pull_request_number: ${{ inputs.pull_request_number }}
+      candidate_sha: ${{ inputs.candidate_sha }}
+      reviewed_head_sha: ${{ inputs.reviewed_head_sha }}
+      ci_verified_sha: ${{ needs.ci.outputs.verified_sha }}
+      target_environment: production
+      environment_name: production
+      slo_status: ${{ needs.config.outputs.slo_enabled == 'true' && needs.slo.outputs.status || 'not-required' }}
+      slo_evidence_sha256: ${{ needs.config.outputs.slo_enabled == 'true' && needs.slo.outputs.evidence_sha256 || '' }}
+      manual_high_risk_release: ${{ inputs.manual_high_risk_release }}
+
+  deploy:
+    needs: gate
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+      deployments: write
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      PLATFORM_DEPLOY_TOKEN: ${{ secrets.PLATFORM_DEPLOY_TOKEN }}
+      PLATFORM_DEPLOY_AUX: ${{ secrets.PLATFORM_DEPLOY_AUX }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.candidate_sha }}
+      - name: Project-specific production deployment adapter
+        run: bash scripts/platform-ops/deploy-production.sh "$CANDIDATE_SHA"
+
+  verify:
+    needs: deploy
+    permissions:
+      contents: read
+      issues: write
+    uses: iotyndall/agentic-platform-operations/.github/workflows/reusable-post-deploy-verify.yml@PINNED_REF
+    with:
+      pull_request_number: ${{ inputs.pull_request_number }}
+      candidate_sha: ${{ inputs.candidate_sha }}
+      target_environment: production
+      environment_name: production

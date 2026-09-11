@@ -1,0 +1,17 @@
+name: Platform issue router
+
+on:
+  issues:
+    types: [opened, edited, reopened]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  route:
+    uses: iotyndall/agentic-platform-operations/.github/workflows/reusable-issue-router.yml@PINNED_REF
+    with:
+      issue_number: ${{ github.event.issue.number }}
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

@@ -1,0 +1,17 @@
+name: Platform feature builder
+
+on:
+  repository_dispatch:
+    types: [agentic-feature-build]
+
+permissions:
+  contents: read
+
+jobs:
+  feature:
+    if: github.event.client_payload.issue_number != null
+    uses: iotyndall/agentic-platform-operations/.github/workflows/reusable-feature-builder.yml@PINNED_REF
+    with:
+      issue_number: ${{ github.event.client_payload.issue_number }}
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

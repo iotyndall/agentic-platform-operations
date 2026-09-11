@@ -1,0 +1,118 @@
+name: Control-plane CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: control-plane-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Parse all workflow YAML
+        shell: bash
+        run: |
+          set -euo pipefail
+          ruby -e 'require "yaml"; (Dir[".github/workflows/*.yml"] + Dir["templates/project/.github/workflows/*.yml"]).sort.each { |f| YAML.parse_file(f); puts "OK  #{f}" }'
+
+      - name: Parse JSON assets and schemas
+        run: |
+          set -euo pipefail
+          for f in schemas/*.json templates/project/.agentic/platform-ops.json examples/*.platform-ops.json; do
+            python -m json.tool "$f" >/dev/null
+          done
+
+      - name: Validate project-contract safety invariants
+        run: |
+          python scripts/validate_contract.py \
+            templates/project/.agentic/platform-ops.json \
+            examples/*.platform-ops.json
+
+      - name: Negative-test contract guardrails
+        run: |
+          set -euo pipefail
+          cp templates/project/.agentic/platform-ops.json /tmp/unsafe.json
+          python - <<'PY'
+          import json
+          p='/tmp/unsafe.json'; d=json.load(open(p)); d['risk']['escalationDomains'].remove('secrets'); json.dump(d, open(p,'w'))
+          PY
+          if python scripts/validate_contract.py /tmp/unsafe.json; then echo '::error::Validator allowed removal of a default RED escalation domain.'; exit 1; fi
+
+          cp templates/project/.agentic/platform-ops.json /tmp/unsafe-production.json
+          python - <<'PY'
+          import json
+          p='/tmp/unsafe-production.json'; d=json.load(open(p)); d['environments']['production']['protected']=False; json.dump(d, open(p,'w'))
+          PY
+          if python scripts/validate_contract.py /tmp/unsafe-production.json; then echo '::error::Validator allowed an unprotected production environment.'; exit 1; fi
+
+          cp templates/project/.agentic/platform-ops.json /tmp/unsafe-repair.json
+          python - <<'PY'
+          import json
+          p='/tmp/unsafe-repair.json'; d=json.load(open(p)); d['project']['autonomyLevel']=2; d['repair']['enabled']=True; d['repair']['reproductionRequired']=False; json.dump(d, open(p,'w'))
+          PY
+          if python scripts/validate_contract.py /tmp/unsafe-repair.json; then echo '::error::Validator allowed autonomous repair without reproduction evidence.'; exit 1; fi
+
+          cp templates/project/.agentic/platform-ops.json /tmp/unsafe-mitigation.json
+          python - <<'PY'
+          import json
+          p='/tmp/unsafe-mitigation.json'; d=json.load(open(p)); d['mitigations']=[{'id':'unsafe-retry','type':'retry-idempotent-job','runbook':'runbooks/webhook-backlog.md','autonomousAllowed':True,'reversible':False,'validationCommand':''}]; json.dump(d, open(p,'w'))
+          PY
+          if python scripts/validate_contract.py /tmp/unsafe-mitigation.json; then echo '::error::Validator allowed an unsafe autonomous mitigation.'; exit 1; fi
+
+      - name: Run full control-plane safety self-test
+        run: python scripts/control_plane_selftest.py
+
+      - name: Compile Python control-plane scripts
+        run: python -m py_compile scripts/*.py
+
+      - name: Assert caller templates demand an explicit central ref
+        run: |
+          set -euo pipefail
+          count=$(grep -RIl 'agentic-platform-operations/.github/workflows/' templates/project/.github/workflows | wc -l | tr -d ' ')
+          pinned=$(grep -RIl '@PINNED_REF' templates/project/.github/workflows | wc -l | tr -d ' ')
+          test "$count" -eq "$pinned" || {
+            echo "::error::$count central workflow callers exist but only $pinned require PINNED_REF"; exit 1
+          }
+
+      - name: Assert model analysis and deterministic mutation are separate jobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in reusable-issue-router.yml reusable-product-intake.yml reusable-triage.yml reusable-engineering-review.yml reusable-learning.yml; do
+            grep -q 'permissions:' ".github/workflows/$f"
+          done
+          echo 'Detailed permission assertions passed in scripts/control_plane_selftest.py.'
+
+      - name: Smoke-test SLO math semantics
+        run: |
+          python - <<'PY'
+          from decimal import Decimal
+          def state(target, good, total, caution='0.5'):
+              target=Decimal(str(target)); caution=Decimal(str(caution))
+              if total == 0: return 'unknown'
+              bad=Decimal(total-good); allowed=(Decimal('1')-target)*Decimal(total)
+              if allowed <= 0: return 'healthy' if bad == 0 else 'exhausted'
+              ratio=bad/allowed
+              if ratio >= Decimal('1'): return 'exhausted'
+              if ratio >= caution: return 'caution'
+              return 'healthy'
+          assert state('0.999', 10000, 10000) == 'healthy'
+          assert state('0.999', 9995, 10000) == 'caution'
+          assert state('0.999', 9990, 10000) == 'exhausted'
+          assert state('0.999', 0, 0) == 'unknown'
+          print('PASS deterministic error-budget states')
+          PY

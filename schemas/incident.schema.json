@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agentic Platform Operations Incident",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["incidentId", "status", "severity", "service", "environment", "detectedAt", "signal", "impact", "evidence", "deployment"],
+  "properties": {
+    "incidentId": {"type": "string", "pattern": "^INC-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{3,}$"},
+    "status": {"enum": ["detected", "triaging", "mitigating", "reproducing", "repairing", "verifying", "resolved", "escalated"]},
+    "severity": {"enum": ["SEV-1", "SEV-2", "SEV-3", "SEV-4"]},
+    "confidence": {"enum": ["low", "medium", "high"]},
+    "service": {"type": "string", "minLength": 1},
+    "environment": {"enum": ["development", "staging", "production"]},
+    "detectedAt": {"type": "string", "format": "date-time"},
+    "updatedAt": {"type": "string", "format": "date-time"},
+    "signal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "type", "summary"],
+      "properties": {
+        "source": {"type": "string", "minLength": 1},
+        "type": {"enum": ["availability", "error-rate", "latency", "webhook", "job", "security", "deployment", "dependency", "manual", "other"]},
+        "summary": {"type": "string", "minLength": 1},
+        "fingerprint": {"type": "string", "minLength": 1},
+        "windowStart": {"type": "string", "format": "date-time"},
+        "windowEnd": {"type": "string", "format": "date-time"}
+      }
+    },
+    "impact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["customerVisible", "summary"],
+      "properties": {
+        "customerVisible": {"type": "boolean"},
+        "summary": {"type": "string", "minLength": 1},
+        "affectedJourneyIds": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "estimatedScope": {"type": "string"}
+      }
+    },
+    "deployment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["currentSha"],
+      "properties": {
+        "currentSha": {"type": "string", "pattern": "^[0-9a-f]{7,40}$"},
+        "priorKnownGoodSha": {"type": "string", "pattern": "^[0-9a-f]{7,40}$"},
+        "deployedAt": {"type": "string", "format": "date-time"},
+        "suspectedChange": {"type": "string"}
+      }
+    },
+    "slo": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string"},
+        "breached": {"type": "boolean"},
+        "errorBudgetState": {"enum": ["healthy", "warning", "exhausted", "unknown"]}
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind", "reference", "redacted"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "kind": {"enum": ["log", "trace", "metric", "synthetic", "test", "deployment", "security", "configuration", "other"]},
+          "reference": {"type": "string", "minLength": 1},
+          "redacted": {"type": "boolean"},
+          "immutable": {"type": "boolean"},
+          "summary": {"type": "string"}
+        }
+      }
+    },
+    "runbook": {"type": "string"},
+    "authorizedMitigations": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "timeline": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["at", "actor", "event"],
+        "properties": {
+          "at": {"type": "string", "format": "date-time"},
+          "actor": {"type": "string"},
+          "event": {"type": "string"},
+          "evidenceId": {"type": "string"}
+        }
+      }
+    }
+  }
+}

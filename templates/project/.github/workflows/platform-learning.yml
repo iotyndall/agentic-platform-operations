@@ -1,0 +1,28 @@
+name: Platform Incident Learning
+
+on:
+  workflow_dispatch:
+    inputs:
+      incident_issue:
+        required: true
+        type: string
+      remediation_pr:
+        required: true
+        type: string
+      deployed_sha:
+        required: true
+        type: string
+
+jobs:
+  learning:
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    uses: iotyndall/agentic-platform-operations/.github/workflows/reusable-learning.yml@PINNED_REF
+    with:
+      incident_issue: ${{ inputs.incident_issue }}
+      remediation_pr: ${{ inputs.remediation_pr }}
+      deployed_sha: ${{ inputs.deployed_sha }}
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
