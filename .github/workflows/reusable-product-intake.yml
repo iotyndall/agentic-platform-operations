@@ -118,7 +118,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     permissions:
-      contents: read
+      contents: write
       issues: write
     env:
       GH_TOKEN: ${{ github.token }}
@@ -139,4 +139,11 @@ jobs:
           gh issue comment "$ISSUE_NUMBER" --body-file "$RUNNER_TEMP/spec.md"
           gh issue comment "$ISSUE_NUMBER" --body-file "$RUNNER_TEMP/review.md"
           for label in product:intake-pending product:engineering-ready product:revise product:escalate; do gh label create "$label" --color d4c5f9 --description 'Agentic product intake state' --force >/dev/null 2>&1 || true; gh issue edit "$ISSUE_NUMBER" --remove-label "$label" >/dev/null 2>&1 || true; done
-          case "$DISP" in PASS) gh issue edit "$ISSUE_NUMBER" --add-label product:engineering-ready ;; REVISE) gh issue edit "$ISSUE_NUMBER" --add-label product:revise ;; ESCALATE) gh issue edit "$ISSUE_NUMBER" --add-label product:escalate ;; esac
+          case "$DISP" in
+            PASS)
+              gh issue edit "$ISSUE_NUMBER" --add-label product:engineering-ready
+              jq -n --argjson number "$ISSUE_NUMBER" '{event_type:"agentic-feature-build",client_payload:{issue_number:$number}}' | gh api --method POST "repos/$GITHUB_REPOSITORY/dispatches" --input -
+              ;;
+            REVISE) gh issue edit "$ISSUE_NUMBER" --add-label product:revise ;;
+            ESCALATE) gh issue edit "$ISSUE_NUMBER" --add-label product:escalate ;;
+          esac
