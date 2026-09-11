@@ -13,6 +13,14 @@ on:
         description: 'Optional canonical incident URL'
         required: false
         type: string
+      reproduction_branch:
+        description: 'Branch containing failing reproduction evidence'
+        required: true
+        type: string
+      reproduction_sha:
+        description: 'Immutable SHA of failing reproduction evidence'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -30,5 +38,7 @@ jobs:
     with:
       issue_number: ${{ github.event.client_payload.issue_number || inputs.issue_number }}
       issue_url: ${{ github.event.client_payload.issue_url || inputs.issue_url || '' }}
+      reproduction_branch: ${{ github.event.client_payload.reproduction_branch || inputs.reproduction_branch }}
+      reproduction_sha: ${{ github.event.client_payload.reproduction_sha || inputs.reproduction_sha }}
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
