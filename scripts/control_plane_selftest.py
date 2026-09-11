@@ -86,6 +86,23 @@ def assert_read_only_model_jobs() -> None:
             fail(f"expected separate deterministic publisher/writer job missing: {name}")
 
 
+def assert_dispatch_permission_contract() -> None:
+    pairs = [
+        ("reusable-issue-router.yml", "apply", "platform-issue-router.yml"),
+        ("reusable-product-intake.yml", "publish", "platform-product-intake.yml"),
+    ]
+    for reusable_name, publisher_job, caller_name in pairs:
+        reusable = workflow_text(reusable_name)
+        block = job_blocks(reusable).get(publisher_job, "")
+        if "repos/$GITHUB_REPOSITORY/dispatches" not in block:
+            fail(f"expected repository_dispatch publisher missing: {reusable_name}:{publisher_job}")
+        if not re.search(r"^\s{6}contents:\s*write\s*$", block, re.M):
+            fail(f"repository_dispatch publisher lacks contents: write: {reusable_name}:{publisher_job}")
+        caller = (TEMPLATES / caller_name).read_text(encoding="utf-8")
+        if not re.search(r"^\s{2}contents:\s*write\s*$", caller, re.M):
+            fail(f"caller caps dispatch workflow below required contents: write: {caller_name}")
+
+
 def assert_routing_boundaries() -> None:
     router = workflow_text("reusable-issue-router.yml")
     dispatcher = workflow_text("reusable-incident-dispatcher.yml")
@@ -161,6 +178,7 @@ def main() -> None:
         assert_schemas_parse,
         assert_action_pinning,
         assert_read_only_model_jobs,
+        assert_dispatch_permission_contract,
         assert_routing_boundaries,
         assert_repair_boundary,
         assert_release_recovery_boundaries,
