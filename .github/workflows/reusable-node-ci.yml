@@ -67,7 +67,7 @@ jobs:
           emit() {
             local key="$1" jq_expr="$2" value
             value="$(jq -r "$jq_expr // \"\"" "$CONFIG_PATH")"
-            if printf '%s' "$value" | grep -q $'\n'; then
+            if [[ "$value" == *$'\n'* ]]; then
               echo "::error::Contract command $key must be a single line"
               exit 1
             fi
