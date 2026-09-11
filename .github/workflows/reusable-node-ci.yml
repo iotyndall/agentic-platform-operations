@@ -13,6 +13,10 @@ on:
         required: false
         type: number
         default: 20
+    outputs:
+      verified_sha:
+        description: 'Exact caller-repository SHA that passed all configured deterministic checks'
+        value: ${{ jobs.verify.outputs.verified_sha }}
 
 permissions:
   contents: read
@@ -80,6 +84,8 @@ jobs:
     needs: contract
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout_minutes }}
+    outputs:
+      verified_sha: ${{ steps.attest.outputs.verified_sha }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -156,3 +162,12 @@ jobs:
         env:
           COMMAND: ${{ needs.contract.outputs.browser }}
         run: bash -euo pipefail -c "$COMMAND"
+
+      - name: Attest exact verified SHA
+        id: attest
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHA="$(git rev-parse HEAD)"
+          test "$SHA" = "$GITHUB_SHA" || echo "Verified checkout SHA $SHA differs from workflow event SHA $GITHUB_SHA; attesting checkout SHA."
+          echo "verified_sha=$SHA" >> "$GITHUB_OUTPUT"
