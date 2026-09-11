@@ -17,19 +17,20 @@ on:
       OPENAI_API_KEY:
         required: true
 
-permissions:
-  contents: read
-  pull-requests: read
-  issues: write
-
 concurrency:
   group: engineering-review-${{ github.repository }}-${{ inputs.pull_request_number }}
   cancel-in-progress: true
 
 jobs:
-  review:
+  analyze:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    outputs:
+      review_json: ${{ steps.capture.outputs.review_json }}
     env:
       GH_TOKEN: ${{ github.token }}
       PR_NUMBER: ${{ inputs.pull_request_number }}
@@ -48,10 +49,7 @@ jobs:
           mkdir -p .agentic-input
           gh pr view "$PR_NUMBER" --json number,title,body,state,isDraft,headRefOid,baseRefName,headRefName,url,files > .agentic-input/pr.json
           ACTUAL="$(jq -r '.headRefOid' .agentic-input/pr.json)"
-          test "$ACTUAL" = "$EXPECTED_HEAD_SHA" || {
-            echo "::error::PR head changed: expected $EXPECTED_HEAD_SHA, actual $ACTUAL"
-            exit 1
-          }
+          test "$ACTUAL" = "$EXPECTED_HEAD_SHA" || { echo "::error::PR head changed: expected $EXPECTED_HEAD_SHA, actual $ACTUAL"; exit 1; }
           jq -e '.state == "OPEN" and .isDraft == false' .agentic-input/pr.json >/dev/null
           gh pr diff "$PR_NUMBER" > .agentic-input/pr.diff
           git show "$EXPECTED_HEAD_SHA:.agentic/platform-ops.json" > .agentic-input/platform-ops.json 2>/dev/null || printf '%s\n' '{}' > .agentic-input/platform-ops.json
@@ -74,52 +72,47 @@ jobs:
 
             Attempt to falsify the implementation rather than summarize it. Evaluate whether the stated outcome is actually achieved, whether tests prove the important behavior, whether the implementation introduces regressions, security/privacy/tenant/data-integrity risks, hidden operational coupling, scope creep, weak rollback assumptions, or changes that should be classified at a higher risk. Pay special attention to auth, authorization/RLS, billing, secrets, migrations, workflows, infrastructure, external integrations, and any project-defined protected paths.
 
-            Return PASS only when the exact reviewed SHA is coherent and adequately evidenced for its declared risk. REVISE means concrete engineering gaps remain. ESCALATE means a human/business/security/architecture decision is required. engineering_ready must be true only for PASS. You have read-only authority: do not edit files, branches, issues, PRs, workflows, settings, or deployments.
+            Return PASS only when the exact reviewed SHA is coherent and adequately evidenced for its declared risk. REVISE means concrete engineering gaps remain. ESCALATE means a human/business/security/architecture decision is required. engineering_ready must be true only for PASS. Do not edit files or GitHub objects; this job has read-only repository/issue permissions.
 
-      - name: Validate and publish immutable review evidence
+      - name: Validate and export review output
+        id: capture
         shell: bash
-        env:
-          REVIEW_FILE: ${{ runner.temp }}/engineering-review.json
         run: |
           set -euo pipefail
-          test -s "$REVIEW_FILE"
-          DISP="$(jq -r '.disposition' "$REVIEW_FILE")"
-          READY="$(jq -r '.engineering_ready' "$REVIEW_FILE")"
-          RISK="$(jq -r '.risk' "$REVIEW_FILE")"
-          case "$DISP" in PASS|REVISE|ESCALATE) ;; *) echo '::error::Invalid review disposition'; exit 1 ;; esac
-          case "$RISK" in low|moderate|high|critical) ;; *) echo '::error::Invalid review risk'; exit 1 ;; esac
-          if [ "$DISP" = PASS ] && [ "$READY" != true ]; then echo '::error::PASS must be engineering_ready=true'; exit 1; fi
-          if [ "$DISP" != PASS ] && [ "$READY" != false ]; then echo '::error::Non-PASS must be engineering_ready=false'; exit 1; fi
+          F="$RUNNER_TEMP/engineering-review.json"; test -s "$F"
+          DISP="$(jq -r '.disposition' "$F")"; READY="$(jq -r '.engineering_ready' "$F")"; RISK="$(jq -r '.risk' "$F")"
+          case "$DISP" in PASS|REVISE|ESCALATE) ;; *) exit 1 ;; esac
+          case "$RISK" in low|moderate|high|critical) ;; *) exit 1 ;; esac
+          if [ "$DISP" = PASS ]; then test "$READY" = true; else test "$READY" = false; fi
+          { echo 'review_json<<__REVIEW__'; cat "$F"; echo '__REVIEW__'; } >> "$GITHUB_OUTPUT"
 
-          jq --arg repo "$GITHUB_REPOSITORY" --argjson pr "$PR_NUMBER" --arg sha "$EXPECTED_HEAD_SHA" \
-            '. + {version:1,repository:$repo,pull_request:$pr,reviewed_head_sha:$sha}' "$REVIEW_FILE" > "$RUNNER_TEMP/review-evidence.json"
-
+  publish:
+    needs: analyze
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR_NUMBER: ${{ inputs.pull_request_number }}
+      EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
+      REVIEW_JSON: ${{ needs.analyze.outputs.review_json }}
+    steps:
+      - name: Recheck head and publish structured review deterministically
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTUAL="$(gh pr view "$PR_NUMBER" --json headRefOid --jq .headRefOid)"
+          test "$ACTUAL" = "$EXPECTED_HEAD_SHA" || { echo '::error::PR head changed after analysis; discard stale review'; exit 1; }
+          printf '%s' "$REVIEW_JSON" > "$RUNNER_TEMP/review.json"
+          DISP="$(jq -r '.disposition' "$RUNNER_TEMP/review.json")"; READY="$(jq -r '.engineering_ready' "$RUNNER_TEMP/review.json")"; RISK="$(jq -r '.risk' "$RUNNER_TEMP/review.json")"
+          if [ "$DISP" = PASS ]; then test "$READY" = true; else test "$READY" = false; fi
+          jq --arg repo "$GITHUB_REPOSITORY" --argjson pr "$PR_NUMBER" --arg sha "$EXPECTED_HEAD_SHA" '. + {version:1,repository:$repo,pull_request:$pr,reviewed_head_sha:$sha}' "$RUNNER_TEMP/review.json" > "$RUNNER_TEMP/review-evidence.json"
           BODY="$RUNNER_TEMP/review-comment.md"
-          {
-            echo '## Independent Engineering Review'
-            echo
-            echo "Reviewed immutable head: \`$EXPECTED_HEAD_SHA\`"
-            echo '<!-- agentic-engineering-review:v1 -->'
-            echo '```json'
-            cat "$RUNNER_TEMP/review-evidence.json"
-            echo
-            echo '```'
-            echo
-            echo '_This review does not merge or deploy the change._'
-          } > "$BODY"
+          { echo '## Independent Engineering Review'; echo; echo "Reviewed immutable head: \`$EXPECTED_HEAD_SHA\`"; echo '<!-- agentic-engineering-review:v1 -->'; echo '```json'; cat "$RUNNER_TEMP/review-evidence.json"; echo; echo '```'; echo; echo '_This review does not merge or deploy the change._'; } > "$BODY"
           gh pr comment "$PR_NUMBER" --body-file "$BODY"
-
-          for label in 'review:pass' 'review:revise' 'review:escalate'; do
-            gh label create "$label" --color 0e8a16 --description 'Independent engineering review state' --force >/dev/null 2>&1 || true
-            gh pr edit "$PR_NUMBER" --remove-label "$label" >/dev/null 2>&1 || true
-          done
-          case "$DISP" in
-            PASS) gh pr edit "$PR_NUMBER" --add-label 'review:pass' ;;
-            REVISE) gh pr edit "$PR_NUMBER" --add-label 'review:revise' ;;
-            ESCALATE) gh pr edit "$PR_NUMBER" --add-label 'review:escalate' ;;
-          esac
-
-          if [ "$DISP" != PASS ]; then
-            echo "::error::Independent review disposition is $DISP"
-            exit 1
-          fi
+          for label in 'review:pass' 'review:revise' 'review:escalate'; do gh label create "$label" --color 0e8a16 --description 'Independent engineering review state' --force >/dev/null 2>&1 || true; gh pr edit "$PR_NUMBER" --remove-label "$label" >/dev/null 2>&1 || true; done
+          case "$DISP" in PASS) gh pr edit "$PR_NUMBER" --add-label review:pass ;; REVISE) gh pr edit "$PR_NUMBER" --add-label review:revise ;; ESCALATE) gh pr edit "$PR_NUMBER" --add-label review:escalate ;; esac
+          if [ "$DISP" != PASS ]; then echo "::error::Independent review disposition is $DISP"; exit 1; fi
