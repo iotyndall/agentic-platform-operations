@@ -8,6 +8,11 @@ on:
         required: false
         type: string
         default: '.agentic/platform-ops.json'
+      checkout_ref:
+        description: 'Optional exact caller-repository ref/SHA to verify; defaults to the workflow event SHA'
+        required: false
+        type: string
+        default: ''
       timeout_minutes:
         description: 'Verification job timeout'
         required: false
@@ -40,6 +45,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
           submodules: false
 
       - name: Validate and read project contract
@@ -89,6 +95,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
           submodules: false
 
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
@@ -169,5 +176,5 @@ jobs:
         run: |
           set -euo pipefail
           SHA="$(git rev-parse HEAD)"
-          test "$SHA" = "$GITHUB_SHA" || echo "Verified checkout SHA $SHA differs from workflow event SHA $GITHUB_SHA; attesting checkout SHA."
           echo "verified_sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "Deterministic verification attests caller-repository SHA $SHA."
