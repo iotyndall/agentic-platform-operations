@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/iotyndall/agentic-platform-operations/schemas/platform-ops.schema.json",
+  "title": "Agentic Platform Operations Project Contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "project", "runtime", "commands", "risk", "production"],
+  "properties": {
+    "version": { "type": "integer", "const": 1 },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "repository", "defaultBranch", "autonomyLevel"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "repository": { "type": "string", "pattern": "^[^/]+/[^/]+$" },
+        "defaultBranch": { "type": "string", "minLength": 1 },
+        "autonomyLevel": { "type": "integer", "minimum": 0, "maximum": 5 }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["node", "python", "mixed", "other"] },
+        "nodeVersion": { "type": "string" },
+        "pythonVersion": { "type": "string" },
+        "packageManager": { "enum": ["pnpm", "npm", "yarn", "none"] }
+      }
+    },
+    "commands": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["install", "build"],
+      "properties": {
+        "install": { "type": "string" },
+        "typecheck": { "type": "string" },
+        "test": { "type": "string" },
+        "lint": { "type": "string" },
+        "build": { "type": "string" },
+        "migrationCheck": { "type": "string" },
+        "integration": { "type": "string" },
+        "productionVerify": { "type": "string" }
+      }
+    },
+    "risk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protectedPathRegex", "maxAutonomousProductionLines", "maxRepairAttempts", "escalationDomains"],
+      "properties": {
+        "protectedPathRegex": { "type": "string", "minLength": 1 },
+        "maxAutonomousProductionLines": { "type": "integer", "minimum": 1, "maximum": 500 },
+        "maxRepairAttempts": { "type": "integer", "minimum": 1, "maximum": 5 },
+        "escalationDomains": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        }
+      }
+    },
+    "security": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "dependencyAuditCommand": { "type": "string" },
+        "criticalAdvisoryAllowlist": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^GHSA-[a-z0-9-]+$" },
+          "uniqueItems": true
+        }
+      }
+    },
+    "infrastructure": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "deploymentProvider": { "type": "string" },
+        "database": { "type": "string" },
+        "observability": { "type": "array", "items": { "type": "string" } },
+        "externalSystems": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "production": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["criticalJourneys"],
+      "properties": {
+        "criticalJourneys": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "description", "owner"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+              "description": { "type": "string", "minLength": 1 },
+              "owner": { "enum": ["local", "central"] },
+              "command": { "type": "string" },
+              "severityOnFailure": { "enum": ["P0", "P1", "P2"] }
+            }
+          }
+        }
+      }
+    },
+    "repair": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "minimumConfidence": { "enum": ["high", "medium"] },
+        "issueLabel": { "type": "string" },
+        "provenanceRegex": { "type": "string" }
+      }
+    }
+  }
+}
