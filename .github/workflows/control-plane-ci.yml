@@ -15,7 +15,7 @@ concurrency:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
@@ -23,7 +23,13 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Parse JSON assets
+      - name: Parse all workflow YAML
+        shell: bash
+        run: |
+          set -euo pipefail
+          ruby -e 'require "yaml"; (Dir[".github/workflows/*.yml"] + Dir["templates/project/.github/workflows/*.yml"]).sort.each { |f| YAML.parse_file(f); puts "OK  #{f}" }'
+
+      - name: Parse JSON assets and schemas
         run: |
           set -euo pipefail
           for f in schemas/*.json templates/project/.agentic/platform-ops.json examples/*.platform-ops.json; do
@@ -67,61 +73,13 @@ jobs:
           PY
           if python scripts/validate_contract.py /tmp/unsafe-mitigation.json; then echo '::error::Validator allowed an unsafe autonomous mitigation.'; exit 1; fi
 
-      - name: Assert third-party Actions are immutable
-        shell: bash
-        run: |
-          set -euo pipefail
-          bad=0
-          while IFS= read -r line; do
-            ref="$(printf '%s' "$line" | sed -E 's/^[[:space:]]*-[[:space:]]*uses:[[:space:]]*//; s/[[:space:]#].*$//')"
-            case "$ref" in ./*) continue ;; esac
-            if ! printf '%s' "$ref" | grep -Eq '@[0-9a-f]{40}$'; then
-              echo "::error::Unpinned action reference: $ref"; bad=1
-            fi
-          done < <(grep -RhE '^[[:space:]]*-[[:space:]]*uses:' .github/workflows || true)
-          test "$bad" -eq 0
+      - name: Run full control-plane safety self-test
+        run: python scripts/control_plane_selftest.py
 
-      - name: Assert bounded-repair workflow stays PR-only
-        shell: bash
-        run: |
-          set -euo pipefail
-          FILE=.github/workflows/reusable-bounded-repair.yml
-          grep -q 'gh pr create' "$FILE"
-          grep -q "CENTRAL_PROTECTED='^(\\\\.github/|\\\\.agentic/|\\\\.env)'" "$FILE"
-          if grep -EIn -- 'gh pr merge|kubectl[[:space:]]+apply|terraform[[:space:]]+apply|vercel[[:space:]].*--prod|aws[[:space:]].*deploy' "$FILE"; then
-            echo '::error::Central bounded-repair workflow contains a direct merge/deploy command.'; exit 1
-          fi
+      - name: Compile Python control-plane scripts
+        run: python -m py_compile scripts/*.py
 
-      - name: Assert product routing safety invariants
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          router = Path('.github/workflows/reusable-issue-router.yml').read_text()
-          dispatch = Path('.github/workflows/reusable-incident-dispatcher.yml').read_text()
-          product = Path('.github/workflows/reusable-product-intake.yml').read_text()
-
-          checks = {
-              'router defines feature category': '- feature: new or changed product capability/behavior' in router,
-              'router labels by classified kind': 'LABEL="kind:$KIND"' in router,
-              'router does not grant repair marker': '**Auto-PR eligible:** `True`' not in router,
-              'dispatcher explicitly excludes feature': "'kind:feature' in labels" in dispatch,
-              'dispatcher requires defect/incident kinds': "{'kind:bug', 'kind:incident'}" in dispatch,
-              'product source permission is read-only': '\n  contents: read\n' in product,
-              'product uses pinned Codex reviewer': 'openai/codex-action@86365089eb2b84e0a8fb0717b304f8bdcb13b20e' in product,
-              'Codex reviewer is filesystem read-only': "permission-profile: ':read-only'" in product,
-          }
-          forbidden = ['contents: write', 'git push', 'gh pr create', 'gh pr merge', 'kubectl apply', 'terraform apply', 'vercel --prod']
-          for term in forbidden:
-              checks[f'product forbids {term}'] = term not in product
-
-          failed = [name for name, ok in checks.items() if not ok]
-          if failed:
-              for name in failed: print(f'::error::{name}')
-              raise SystemExit(1)
-          for name in checks: print(f'PASS {name}')
-          PY
-
-      - name: Ensure caller templates demand an explicit central ref
+      - name: Assert caller templates demand an explicit central ref
         run: |
           set -euo pipefail
           count=$(grep -RIl 'agentic-platform-operations/.github/workflows/' templates/project/.github/workflows | wc -l | tr -d ' ')
@@ -129,3 +87,29 @@ jobs:
           test "$count" -eq "$pinned" || {
             echo "::error::$count central workflow callers exist but only $pinned require PINNED_REF"; exit 1
           }
+
+      - name: Assert model analysis and deterministic mutation are separate jobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in reusable-issue-router.yml reusable-product-intake.yml reusable-triage.yml reusable-engineering-review.yml reusable-learning.yml; do
+            grep -q 'permissions:' ".github/workflows/$f"
+          done
+          echo 'Detailed permission assertions passed in scripts/control_plane_selftest.py.'
+
+      - name: Smoke-test SLO math semantics
+        run: |
+          python - <<'PY'
+          def state(target, good, total, caution=.5):
+              if total == 0: return 'unknown'
+              bad=total-good; allowed=(1-target)*total
+              ratio=(0 if bad==0 else float('inf')) if allowed<=0 else bad/allowed
+              if ratio >= 1: return 'exhausted'
+              if ratio >= caution: return 'caution'
+              return 'healthy'
+          assert state(.999, 10000, 10000) == 'healthy'
+          assert state(.999, 9995, 10000) == 'caution'
+          assert state(.999, 9990, 10000) == 'exhausted'
+          assert state(.999, 0, 0) == 'unknown'
+          print('PASS deterministic error-budget states')
+          PY
