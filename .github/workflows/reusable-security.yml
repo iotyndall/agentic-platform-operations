@@ -1,0 +1,113 @@
+name: Reusable security ratchet
+
+on:
+  workflow_call:
+    inputs:
+      config_path:
+        required: false
+        type: string
+        default: '.agentic/platform-ops.json'
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: false
+
+      - name: Read contract
+        id: contract
+        shell: bash
+        env:
+          CONFIG_PATH: ${{ inputs.config_path }}
+        run: |
+          set -euo pipefail
+          test -f "$CONFIG_PATH"
+          jq -e --arg repo "$GITHUB_REPOSITORY" '.project.repository == $repo' "$CONFIG_PATH" >/dev/null
+          echo "node_version=$(jq -r '.runtime.nodeVersion // "22"' "$CONFIG_PATH")" >> "$GITHUB_OUTPUT"
+          echo "package_manager=$(jq -r '.runtime.packageManager // "pnpm"' "$CONFIG_PATH")" >> "$GITHUB_OUTPUT"
+          echo "install=$(jq -r '.commands.install' "$CONFIG_PATH")" >> "$GITHUB_OUTPUT"
+          echo "audit=$(jq -r '.security.dependencyAuditCommand // ""' "$CONFIG_PATH")" >> "$GITHUB_OUTPUT"
+          jq -r '.security.criticalAdvisoryAllowlist[]? // empty' "$CONFIG_PATH" | sort -u > "$RUNNER_TEMP/allowed-ghsa.txt"
+
+      - uses: pnpm/action-setup@v4
+        if: steps.contract.outputs.package_manager == 'pnpm'
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v5
+        if: steps.contract.outputs.node_version != ''
+        with:
+          node-version: ${{ steps.contract.outputs.node_version }}
+
+      - name: Install dependencies
+        shell: bash
+        env:
+          COMMAND: ${{ steps.contract.outputs.install }}
+        run: bash -euo pipefail -c "$COMMAND"
+
+      - name: Block new critical dependency advisories
+        if: steps.contract.outputs.audit != ''
+        shell: bash
+        env:
+          COMMAND: ${{ steps.contract.outputs.audit }}
+        run: |
+          set -euo pipefail
+          set +e
+          bash -euo pipefail -c "$COMMAND" 2>&1 | tee "$RUNNER_TEMP/audit.log"
+          status=${PIPESTATUS[0]}
+          set -e
+
+          if [ "$status" -eq 0 ]; then
+            echo 'No dependency finding at the configured blocking threshold.'
+            exit 0
+          fi
+
+          grep -Eo 'GHSA-[a-z0-9-]+' "$RUNNER_TEMP/audit.log" | sort -u > "$RUNNER_TEMP/found-ghsa.txt" || true
+          if [ ! -s "$RUNNER_TEMP/found-ghsa.txt" ]; then
+            echo '::error::Dependency audit failed but emitted no recognizable GHSA IDs; refusing to baseline an ambiguous failure.'
+            exit 1
+          fi
+
+          comm -23 "$RUNNER_TEMP/found-ghsa.txt" "$RUNNER_TEMP/allowed-ghsa.txt" > "$RUNNER_TEMP/new-ghsa.txt" || true
+          comm -13 "$RUNNER_TEMP/found-ghsa.txt" "$RUNNER_TEMP/allowed-ghsa.txt" > "$RUNNER_TEMP/stale-allowlist.txt" || true
+
+          if [ -s "$RUNNER_TEMP/new-ghsa.txt" ]; then
+            echo '::error::New dependency advisories are outside the project security ratchet:'
+            cat "$RUNNER_TEMP/new-ghsa.txt"
+            exit 1
+          fi
+
+          echo '::warning::Audit failed only for explicitly baselined advisory IDs. Remediation remains required.'
+          if [ -s "$RUNNER_TEMP/stale-allowlist.txt" ]; then
+            echo '::warning::Some allowlisted advisories were not observed and may be removable:'
+            cat "$RUNNER_TEMP/stale-allowlist.txt"
+          fi
+
+  high-signal-secret-guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: false
+
+      - name: Reject high-confidence committed credential material
+        shell: bash
+        run: |
+          set -euo pipefail
+          PATTERN='-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|sk_live_[A-Za-z0-9]+|github_pat_[A-Za-z0-9_]+|ghp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|ANTHROPIC_API_KEY[[:space:]]*=[[:space:]]*[^$<{[:space:]]|OPENAI_API_KEY[[:space:]]*=[[:space:]]*[^$<{[:space:]]'
+          if grep -RInE \
+            --exclude-dir=.git \
+            --exclude-dir=node_modules \
+            --exclude='.env.example' \
+            -- "$PATTERN" .; then
+            echo '::error::High-confidence credential material appears to be committed.'
+            exit 1
+          fi
+          echo 'No high-confidence credential formats found.'
