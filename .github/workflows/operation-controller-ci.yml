@@ -1,0 +1,55 @@
+name: Operation controller CI
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/operation_controller.py'
+      - 'scripts/operation_controller_selftest.py'
+      - 'schemas/operation-record.schema.json'
+      - 'docs/OPERATION_STATE_MACHINE.md'
+      - '.github/workflows/operation-controller-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/operation_controller.py'
+      - 'scripts/operation_controller_selftest.py'
+      - 'schemas/operation-record.schema.json'
+      - 'docs/OPERATION_STATE_MACHINE.md'
+      - '.github/workflows/operation-controller-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: operation-controller-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  behavioral-proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Parse operation-record schema
+        run: python -m json.tool schemas/operation-record.schema.json >/dev/null
+
+      - name: Compile deterministic controller
+        run: python -m py_compile scripts/operation_controller.py scripts/operation_controller_selftest.py
+
+      - name: Prove happy path, recovery path, and fail-closed transitions
+        working-directory: scripts
+        run: python operation_controller_selftest.py
+
+      - name: Assert controller has no execution authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          f=scripts/operation_controller.py
+          ! grep -Eq '(^|[[:space:]])import[[:space:]]+(subprocess|requests|urllib|socket)|from[[:space:]]+(subprocess|requests|urllib|socket)' "$f"
+          ! grep -Eiq 'gh pr merge|kubectl|terraform|vercel|aws deploy|supabase|rollback-production|deploy-production' "$f"
+          echo 'PASS controller is a pure evidence/state validator with no deployment authority'

@@ -82,14 +82,25 @@ jobs:
       - name: Compile Python control-plane scripts
         run: python -m py_compile scripts/*.py
 
-      - name: Assert caller templates demand an explicit central ref
+      - name: Assert every central project-template reference is explicitly pinned
         run: |
           set -euo pipefail
-          count=$(grep -RIl 'agentic-platform-operations/.github/workflows/' templates/project/.github/workflows | wc -l | tr -d ' ')
-          pinned=$(grep -RIl '@PINNED_REF' templates/project/.github/workflows | wc -l | tr -d ' ')
-          test "$count" -eq "$pinned" || {
-            echo "::error::$count central workflow callers exist but only $pinned require PINNED_REF"; exit 1
-          }
+          python - <<'PY'
+          from pathlib import Path
+          root=Path('templates/project/.github/workflows')
+          prefix='iotyndall/agentic-platform-operations/'
+          found=0
+          for path in sorted(root.glob('*.yml')):
+              for lineno,line in enumerate(path.read_text().splitlines(),1):
+                  if prefix not in line:
+                      continue
+                  found += 1
+                  if '@PINNED_REF' not in line:
+                      raise SystemExit(f'{path}:{lineno}: central reference is not pinned: {line.strip()}')
+          if found == 0:
+              raise SystemExit('no central project-template references found')
+          print(f'PASS {found} central workflow/action references explicitly require PINNED_REF')
+          PY
 
       - name: Assert dependency parser supports npm audit v1 and v2
         shell: bash
