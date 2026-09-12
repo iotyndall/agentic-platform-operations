@@ -1,0 +1,391 @@
+name: Reusable consolidated deterministic PR gate
+
+on:
+  workflow_call:
+    inputs:
+      config_path:
+        description: 'Project-local operations contract'
+        required: false
+        type: string
+        default: '.agentic/platform-ops.json'
+      checkout_ref:
+        description: 'Optional exact caller-repository ref/SHA to verify; defaults to the workflow event SHA'
+        required: false
+        type: string
+        default: ''
+      timeout_minutes:
+        description: 'Consolidated deterministic gate timeout'
+        required: false
+        type: number
+        default: 25
+    outputs:
+      risk:
+        description: 'low, moderate, or high'
+        value: ${{ jobs.gate.outputs.risk }}
+      changed_count:
+        description: 'Number of changed files'
+        value: ${{ jobs.gate.outputs.changed_count }}
+      verified_sha:
+        description: 'Exact caller-repository SHA that passed all deterministic checks'
+        value: ${{ jobs.gate.outputs.verified_sha }}
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: deterministic-pr-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    outputs:
+      risk: ${{ steps.risk.outputs.risk }}
+      changed_count: ${{ steps.risk.outputs.changed_count }}
+      verified_sha: ${{ steps.attest.outputs.verified_sha }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
+          fetch-depth: 0
+          submodules: false
+
+      - name: Validate and read project contract
+        id: contract
+        shell: bash
+        env:
+          CONFIG_PATH: ${{ inputs.config_path }}
+        run: |
+          set -euo pipefail
+          test -f "$CONFIG_PATH" || { echo "::error::Missing $CONFIG_PATH"; exit 1; }
+          jq -e '.version == 1' "$CONFIG_PATH" >/dev/null
+          jq -e --arg repo "$GITHUB_REPOSITORY" '.project.repository == $repo' "$CONFIG_PATH" >/dev/null || {
+            echo "::error::project.repository must equal $GITHUB_REPOSITORY"
+            exit 1
+          }
+          jq -e '.commands.install | type == "string" and length > 0' "$CONFIG_PATH" >/dev/null
+          jq -e '.commands.build | type == "string" and length > 0' "$CONFIG_PATH" >/dev/null
+          jq -e '.risk.unknownRiskDefaultsTo == "high" or .risk.unknownRiskDefaultsTo == "critical" or .risk.unknownRiskDefaultsTo == null' "$CONFIG_PATH" >/dev/null
+
+          emit() {
+            local key="$1" jq_expr="$2" value
+            value="$(jq -r "$jq_expr // \"\"" "$CONFIG_PATH")"
+            if [[ "$value" == *$'\n'* ]]; then
+              echo "::error::Contract command $key must be a single line"
+              exit 1
+            fi
+            printf '%s=%s\n' "$key" "$value" >> "$GITHUB_OUTPUT"
+          }
+
+          emit node_version '.runtime.nodeVersion'
+          emit package_manager '.runtime.packageManager'
+          emit install '.commands.install'
+          emit typecheck '.commands.typecheck'
+          emit test '.commands.test'
+          emit lint '.commands.lint'
+          emit build '.commands.build'
+          emit migration_check '.commands.migrationCheck'
+          emit integration '.commands.integration'
+          emit contract_test '.commands.contract'
+          emit browser '.commands.browser'
+          emit audit '.security.dependencyAuditCommand'
+          jq -r '.security.criticalAdvisoryAllowlist[]? // empty' "$CONFIG_PATH" | sort -u > "$RUNNER_TEMP/allowed-ghsa.txt"
+
+      - name: Classify changed-file risk
+        id: risk
+        shell: bash
+        env:
+          CONFIG_PATH: ${{ inputs.config_path }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ -n "${PR_BASE_SHA:-}" ]; then
+            BASE="$PR_BASE_SHA"
+          else
+            BASE="$(git rev-parse HEAD^)"
+          fi
+          git diff --name-only "$BASE...HEAD" | sort -u > "$RUNNER_TEMP/changed.txt"
+          COUNT="$(wc -l < "$RUNNER_TEMP/changed.txt" | tr -d ' ')"
+          echo "changed_count=$COUNT" >> "$GITHUB_OUTPUT"
+
+          if [ "$COUNT" -eq 0 ]; then
+            RISK=low
+          else
+            PROTECTED_RE="$(jq -r '.risk.protectedPathRegex' "$CONFIG_PATH")"
+            CENTRAL_HIGH='^(\.github/|\.agentic/|infrastructure/|terraform/|supabase/migrations/|auth/|billing/|security/)|(^|/)(Dockerfile|compose[^/]*\.ya?ml|agent-policy\.md)$'
+            if grep -Eiq -- "$CENTRAL_HIGH" "$RUNNER_TEMP/changed.txt" || grep -Eiq -- "$PROTECTED_RE" "$RUNNER_TEMP/changed.txt"; then
+              RISK=high
+            elif awk '
+              /(^|\/)(docs?|tests?|__tests__|fixtures?)\// {next}
+              /\.(md|txt|test\.[^.]+|spec\.[^.]+)$/ {next}
+              {exit 1}
+            ' "$RUNNER_TEMP/changed.txt"; then
+              RISK=low
+            else
+              RISK=moderate
+            fi
+          fi
+
+          echo "risk=$RISK" >> "$GITHUB_OUTPUT"
+          {
+            echo '### Platform risk classification'
+            echo
+            echo "**Risk:** $RISK"
+            echo "**Changed files:** $COUNT"
+            echo
+            echo 'Low-risk changes still run the complete deterministic gate. Independent AI review is reserved for moderate/high changes.'
+            echo
+            echo '```text'
+            cat "$RUNNER_TEMP/changed.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Reject high-confidence committed credential material
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import re
+          from pathlib import Path
+
+          token_patterns = [
+              ('stripe-live-key', re.compile(r'sk_live_[A-Za-z0-9]{16,}')),
+              ('github-fine-grained-pat', re.compile(r'github_pat_[A-Za-z0-9_]{20,}')),
+              ('github-classic-pat', re.compile(r'ghp_[A-Za-z0-9]{20,}')),
+              ('aws-access-key', re.compile(r'AKIA[0-9A-Z]{16}')),
+              ('anthropic-api-key', re.compile(r'sk-ant-[A-Za-z0-9_-]{20,}')),
+              ('openai-api-key', re.compile(r'sk-(?!ant-)(?:(?:proj|svcacct)-)?[A-Za-z0-9_-]{20,}')),
+          ]
+          pem = re.compile(
+              r'-----BEGIN (?:(?:RSA|EC|OPENSSH) )?PRIVATE KEY-----'
+              r'\s+([A-Za-z0-9+/=\r\n]{80,}?)\s+'
+              r'-----END (?:(?:RSA|EC|OPENSSH) )?PRIVATE KEY-----',
+              re.S,
+          )
+          skip_dirs = {'.git', 'node_modules', '.next', 'dist', 'build', 'coverage'}
+          findings = []
+          for path in Path('.').rglob('*'):
+              if not path.is_file() or any(part in skip_dirs for part in path.parts):
+                  continue
+              try:
+                  if path.stat().st_size > 2_000_000:
+                      continue
+                  text = path.read_text(encoding='utf-8')
+              except (UnicodeDecodeError, OSError):
+                  continue
+              for kind, pattern in token_patterns:
+                  if pattern.search(text):
+                      findings.append((str(path), kind))
+              if pem.search(text):
+                  findings.append((str(path), 'private-key-block'))
+          if findings:
+              for path, kind in sorted(set(findings)):
+                  print(f'::error file={path}::High-confidence committed credential material detected ({kind}).')
+              raise SystemExit(1)
+          print('No high-confidence credential formats found.')
+          PY
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        if: steps.contract.outputs.package_manager == 'pnpm'
+        with:
+          version: 10
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        if: steps.contract.outputs.node_version != ''
+        with:
+          node-version: ${{ steps.contract.outputs.node_version }}
+
+      - name: Install dependencies once
+        shell: bash
+        env:
+          COMMAND: ${{ steps.contract.outputs.install }}
+        run: bash -euo pipefail -c "$COMMAND"
+
+      - name: Block new critical dependency advisories
+        if: steps.contract.outputs.audit != ''
+        shell: bash
+        env:
+          COMMAND: ${{ steps.contract.outputs.audit }}
+        run: |
+          set -euo pipefail
+          set +e
+          bash -euo pipefail -c "$COMMAND" > "$RUNNER_TEMP/audit.json" 2> "$RUNNER_TEMP/audit.stderr"
+          status=$?
+          set -e
+          cat "$RUNNER_TEMP/audit.stderr" >&2 || true
+          cat "$RUNNER_TEMP/audit.json"
+
+          python - "$RUNNER_TEMP/audit.json" "$RUNNER_TEMP/found-critical-ghsa.txt" <<'PY'
+          import json, re, sys
+
+          GHSA_RE = re.compile(r'GHSA-[A-Za-z0-9-]+')
+
+          def extract_ghsa(advisory):
+              ghsa = advisory.get('github_advisory_id')
+              if isinstance(ghsa, str) and GHSA_RE.fullmatch(ghsa):
+                  return ghsa
+              url = advisory.get('url')
+              if isinstance(url, str):
+                  match = GHSA_RE.search(url)
+                  if match:
+                      return match.group(0)
+              return None
+
+          def critical_ids(data):
+              advisories = data.get('advisories')
+              if isinstance(advisories, dict):
+                  found, malformed = set(), []
+                  for advisory in advisories.values():
+                      if str(advisory.get('severity', '')).lower() != 'critical':
+                          continue
+                      ghsa = extract_ghsa(advisory)
+                      if ghsa:
+                          found.add(ghsa)
+                      else:
+                          malformed.append(str(advisory.get('github_advisory_id') or advisory.get('url')))
+                  if malformed:
+                      raise ValueError('Critical advisories were present without valid GHSA IDs: ' + ', '.join(malformed))
+                  return found
+
+              vulnerabilities = data.get('vulnerabilities')
+              if isinstance(vulnerabilities, dict):
+                  critical_roots = {
+                      name for name, vuln in vulnerabilities.items()
+                      if isinstance(vuln, dict) and str(vuln.get('severity', '')).lower() == 'critical'
+                  }
+                  found, malformed = set(), []
+                  def walk(name, seen):
+                      if name in seen:
+                          return
+                      seen.add(name)
+                      vuln = vulnerabilities.get(name)
+                      if not isinstance(vuln, dict):
+                          return
+                      for via in vuln.get('via', []):
+                          if isinstance(via, str):
+                              if via in vulnerabilities:
+                                  walk(via, seen)
+                              continue
+                          if not isinstance(via, dict):
+                              continue
+                          if str(via.get('severity', '')).lower() != 'critical':
+                              continue
+                          ghsa = extract_ghsa(via)
+                          if ghsa:
+                              found.add(ghsa)
+                          else:
+                              malformed.append(f'{name}:{via.get("url") or via.get("source") or "unknown"}')
+                  for name in sorted(critical_roots):
+                      walk(name, set())
+                  metadata_critical = data.get('metadata', {}).get('vulnerabilities', {}).get('critical')
+                  if metadata_critical is not None:
+                      reported = int(metadata_critical)
+                      if reported > 0 and not critical_roots:
+                          raise ValueError('npm audit reports critical vulnerabilities but no critical vulnerability objects were found')
+                  if malformed:
+                      raise ValueError('Critical advisories were present without valid GHSA IDs: ' + ', '.join(malformed))
+                  if critical_roots and not found:
+                      raise ValueError('Critical vulnerabilities were present but no GHSA advisory ID could be resolved')
+                  return found
+              raise ValueError('Dependency audit JSON has neither advisories nor vulnerabilities; refusing ambiguous security evidence.')
+
+          source, destination = sys.argv[1:]
+          try:
+              with open(source, encoding='utf-8') as f:
+                  data = json.load(f)
+              critical = critical_ids(data)
+          except Exception as exc:
+              raise SystemExit(f'::error::Dependency audit evidence is ambiguous: {exc}')
+          with open(destination, 'w', encoding='utf-8') as f:
+              for ghsa in sorted(critical):
+                  f.write(ghsa + '\n')
+          PY
+
+          if [ ! -s "$RUNNER_TEMP/found-critical-ghsa.txt" ]; then
+            if [ "$status" -ne 0 ]; then
+              echo '::notice::Dependency audit reported lower-severity findings, but no critical advisories are present.'
+            else
+              echo 'No critical dependency advisories found.'
+            fi
+            exit 0
+          fi
+
+          comm -23 "$RUNNER_TEMP/found-critical-ghsa.txt" "$RUNNER_TEMP/allowed-ghsa.txt" > "$RUNNER_TEMP/new-ghsa.txt" || true
+          comm -13 "$RUNNER_TEMP/found-critical-ghsa.txt" "$RUNNER_TEMP/allowed-ghsa.txt" > "$RUNNER_TEMP/stale-allowlist.txt" || true
+          if [ -s "$RUNNER_TEMP/new-ghsa.txt" ]; then
+            echo '::error::New critical dependency advisories are outside the project security ratchet:'
+            cat "$RUNNER_TEMP/new-ghsa.txt"
+            exit 1
+          fi
+          echo '::warning::Critical audit findings are limited to explicitly baselined advisory IDs. Remediation remains required.'
+          if [ -s "$RUNNER_TEMP/stale-allowlist.txt" ]; then
+            echo '::warning::Some allowlisted critical advisories were not observed and may be removable:'
+            cat "$RUNNER_TEMP/stale-allowlist.txt"
+          fi
+
+      - name: Type check
+        if: steps.contract.outputs.typecheck != ''
+        shell: bash
+        env:
+          COMMAND: ${{ steps.contract.outputs.typecheck }}
+        run: bash -euo pipefail -c "$COMMAND"
+
+      - name: Unit/test suite
+        if: steps.contract.outputs.test != ''
+        shell: bash
+        env:
+          COMMAND: ${{ steps.contract.outputs.test }}
+        run: bash -euo pipefail -c "$COMMAND"
+
+      - name: Lint
+        if: steps.contract.outputs.lint != ''
+        shell: bash
+        env:
+          COMMAND: ${{ steps.contract.outputs.lint }}
+        run: bash -euo pipefail -c "$COMMAND"
+
+      - name: Build
+        shell: bash
+        env:
+          COMMAND: ${{ steps.contract.outputs.build }}
+          NEXT_TELEMETRY_DISABLED: '1'
+        run: bash -euo pipefail -c "$COMMAND"
+
+      - name: Migration/schema check
+        if: steps.contract.outputs.migration_check != ''
+        shell: bash
+        env:
+          COMMAND: ${{ steps.contract.outputs.migration_check }}
+        run: bash -euo pipefail -c "$COMMAND"
+
+      - name: Integration checks
+        if: steps.contract.outputs.integration != ''
+        shell: bash
+        env:
+          COMMAND: ${{ steps.contract.outputs.integration }}
+        run: bash -euo pipefail -c "$COMMAND"
+
+      - name: External API/webhook contract checks
+        if: steps.contract.outputs.contract_test != ''
+        shell: bash
+        env:
+          COMMAND: ${{ steps.contract.outputs.contract_test }}
+        run: bash -euo pipefail -c "$COMMAND"
+
+      - name: Browser/E2E checks
+        if: steps.contract.outputs.browser != ''
+        shell: bash
+        env:
+          COMMAND: ${{ steps.contract.outputs.browser }}
+        run: bash -euo pipefail -c "$COMMAND"
+
+      - name: Attest exact verified SHA
+        id: attest
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHA="$(git rev-parse HEAD)"
+          echo "verified_sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "Consolidated deterministic gate attests caller-repository SHA $SHA."
