@@ -1,0 +1,160 @@
+name: Platform Operation State
+
+on:
+  repository_dispatch:
+    types: [agentic-operation-state]
+  workflow_dispatch:
+    inputs:
+      command:
+        description: init, transition, or validate
+        required: true
+        type: choice
+        options: [init, transition, validate]
+      incident_issue:
+        description: Canonical incident issue number
+        required: true
+        type: string
+      operation_id:
+        description: Required only for init
+        required: false
+        type: string
+      source_type:
+        description: Required only for init
+        required: false
+        type: string
+      signal:
+        description: Required only for init
+        required: false
+        type: string
+      production_before_sha:
+        description: Optional known-good production SHA for init
+        required: false
+        type: string
+      target_state:
+        description: Required only for transition
+        required: false
+        type: string
+      evidence_json:
+        description: Required JSON object only for transition
+        required: false
+        type: string
+        default: '{}'
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: operation-${{ github.event.client_payload.incident_issue || inputs.incident_issue }}
+  cancel-in-progress: false
+
+jobs:
+  persist:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      COMMAND: ${{ github.event.client_payload.command || inputs.command }}
+      INCIDENT_ISSUE: ${{ github.event.client_payload.incident_issue || inputs.incident_issue }}
+      OPERATION_ID: ${{ github.event.client_payload.operation_id || inputs.operation_id }}
+      SOURCE_TYPE: ${{ github.event.client_payload.source_type || inputs.source_type }}
+      SIGNAL: ${{ github.event.client_payload.signal || inputs.signal }}
+      PRODUCTION_BEFORE_SHA: ${{ github.event.client_payload.production_before_sha || inputs.production_before_sha }}
+      TARGET_STATE: ${{ github.event.client_payload.target_state || inputs.target_state }}
+      EVIDENCE_JSON: ${{ toJSON(github.event.client_payload.evidence || fromJSON(inputs.evidence_json || '{}')) }}
+    steps:
+      - name: Validate request and load latest bot-authored operation record
+        id: prep
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$COMMAND" in init|transition|validate) ;; *) echo '::error::Invalid operation command'; exit 1 ;; esac
+          printf '%s' "$INCIDENT_ISSUE" | grep -Eq '^[1-9][0-9]*$' || { echo '::error::incident_issue must be a positive integer'; exit 1; }
+          gh issue view "$INCIDENT_ISSUE" --repo "$GITHUB_REPOSITORY" --json number,state,labels > "$RUNNER_TEMP/issue.json"
+          jq -e '.state == "OPEN"' "$RUNNER_TEMP/issue.json" >/dev/null || { echo '::error::Operation state may only advance on an open incident'; exit 1; }
+
+          gh api "repos/$GITHUB_REPOSITORY/issues/$INCIDENT_ISSUE/comments?per_page=100" > "$RUNNER_TEMP/comments.json"
+          python - "$RUNNER_TEMP/comments.json" "$RUNNER_TEMP/operation.json" <<'PY'
+          import json,re,sys
+          comments=json.load(open(sys.argv[1]))
+          marker='<!-- agentic-operation-record:v1 -->'
+          found=[]
+          for c in comments:
+              if c.get('user',{}).get('login')!='github-actions[bot]': continue
+              body=c.get('body') or ''
+              if marker not in body: continue
+              m=re.search(r'```json\s*(\{.*\})\s*```',body,re.S)
+              if not m: continue
+              try: record=json.loads(m.group(1))
+              except Exception: continue
+              found.append(record)
+          if found:
+              json.dump(found[-1],open(sys.argv[2],'w'),separators=(',',':'))
+          PY
+
+          if [ "$COMMAND" = init ]; then
+            test ! -s "$RUNNER_TEMP/operation.json" || { echo '::error::Operation already initialized for this incident'; exit 1; }
+            test -n "$OPERATION_ID" && test -n "$SOURCE_TYPE" && test -n "$SIGNAL" || { echo '::error::init requires operation_id, source_type, and signal'; exit 1; }
+          else
+            test -s "$RUNNER_TEMP/operation.json" || { echo '::error::No bot-authored operation record exists for this incident'; exit 1; }
+            jq -e --arg repo "$GITHUB_REPOSITORY" --argjson issue "$INCIDENT_ISSUE" '.repository==$repo and .incident_issue==$issue' "$RUNNER_TEMP/operation.json" >/dev/null || {
+              echo '::error::Persisted operation record is bound to a different repository or incident'; exit 1
+            }
+          fi
+
+          python - <<'PY'
+          import json,os
+          value=os.environ.get('EVIDENCE_JSON','{}')
+          data=json.loads(value)
+          if not isinstance(data,dict): raise SystemExit('evidence must be a JSON object')
+          json.dump(data,open(os.environ['RUNNER_TEMP']+'/evidence.json','w'),separators=(',',':'))
+          PY
+
+      - name: Initialize operation
+        if: env.COMMAND == 'init'
+        uses: iotyndall/agentic-platform-operations/.github/actions/operation-controller@PINNED_REF
+        with:
+          command: init
+          output_file: ${{ runner.temp }}/next-operation.json
+          operation_id: ${{ env.OPERATION_ID }}
+          repository: ${{ github.repository }}
+          incident_issue: ${{ env.INCIDENT_ISSUE }}
+          source_type: ${{ env.SOURCE_TYPE }}
+          signal: ${{ env.SIGNAL }}
+          production_before_sha: ${{ env.PRODUCTION_BEFORE_SHA }}
+
+      - name: Advance operation
+        if: env.COMMAND == 'transition'
+        uses: iotyndall/agentic-platform-operations/.github/actions/operation-controller@PINNED_REF
+        with:
+          command: transition
+          record_file: ${{ runner.temp }}/operation.json
+          evidence_file: ${{ runner.temp }}/evidence.json
+          output_file: ${{ runner.temp }}/next-operation.json
+          target_state: ${{ env.TARGET_STATE }}
+
+      - name: Validate operation
+        if: env.COMMAND == 'validate'
+        uses: iotyndall/agentic-platform-operations/.github/actions/operation-controller@PINNED_REF
+        with:
+          command: validate
+          record_file: ${{ runner.temp }}/operation.json
+
+      - name: Publish immutable next record as a bot-authored incident comment
+        if: env.COMMAND != 'validate'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "$RUNNER_TEMP/next-operation.json" || { echo '::error::Controller did not emit next operation record'; exit 1; }
+          BODY="$RUNNER_TEMP/operation-comment.md"
+          {
+            echo '<!-- agentic-operation-record:v1 -->'
+            echo '## Platform Operation State'
+            echo
+            echo '```json'
+            cat "$RUNNER_TEMP/next-operation.json"
+            echo '```'
+            echo
+            echo '_Machine-authored evidence record. Agents cannot edit state directly._'
+          } > "$BODY"
+          jq -Rs '{body:.}' "$BODY" | gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$INCIDENT_ISSUE/comments" --input - >/dev/null
