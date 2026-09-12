@@ -114,7 +114,10 @@ jobs:
           jq --arg repo "$GITHUB_REPOSITORY" --argjson pr "$PR_NUMBER" --arg sha "$EXPECTED_HEAD_SHA" '. + {version:1,repository:$repo,pull_request:$pr,reviewed_head_sha:$sha}' "$RUNNER_TEMP/review.json" > "$RUNNER_TEMP/review-evidence.json"
           BODY="$RUNNER_TEMP/review-comment.md"
           { echo '## Independent Engineering Review'; echo; echo "Reviewed immutable head: \`$EXPECTED_HEAD_SHA\`"; echo '<!-- agentic-engineering-review:v1 -->'; echo '```json'; cat "$RUNNER_TEMP/review-evidence.json"; echo; echo '```'; echo; echo '_This review does not merge or deploy the change._'; } > "$BODY"
-          gh pr comment "$PR_NUMBER" --body-file "$BODY"
-          for label in 'review:pass' 'review:revise' 'review:escalate'; do gh label create "$label" --color 0e8a16 --description 'Independent engineering review state' --force >/dev/null 2>&1 || true; gh pr edit "$PR_NUMBER" --remove-label "$label" >/dev/null 2>&1 || true; done
-          case "$DISP" in PASS) gh pr edit "$PR_NUMBER" --add-label review:pass ;; REVISE) gh pr edit "$PR_NUMBER" --add-label review:revise ;; ESCALATE) gh pr edit "$PR_NUMBER" --add-label review:escalate ;; esac
+          jq -Rs '{body:.}' "$BODY" | gh api --method POST "repos/$GH_REPO/issues/$PR_NUMBER/comments" --input - >/dev/null
+          for label in 'review:pass' 'review:revise' 'review:escalate'; do
+            gh label create "$label" --color 0e8a16 --description 'Independent engineering review state' --force >/dev/null 2>&1 || true
+            gh issue edit "$PR_NUMBER" --remove-label "$label" >/dev/null 2>&1 || true
+          done
+          case "$DISP" in PASS) gh issue edit "$PR_NUMBER" --add-label review:pass ;; REVISE) gh issue edit "$PR_NUMBER" --add-label review:revise ;; ESCALATE) gh issue edit "$PR_NUMBER" --add-label review:escalate ;; esac
           if [ "$DISP" != PASS ]; then echo "::error::Independent review disposition is $DISP"; exit 1; fi
