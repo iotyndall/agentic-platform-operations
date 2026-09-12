@@ -36,6 +36,7 @@ jobs:
       fingerprint_hash: ${{ steps.validate.outputs.fingerprint_hash }}
     env:
       GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
       INCIDENT_JSON: ${{ inputs.incident_json }}
     steps:
       - name: Validate narrow incident metadata and reject obvious sensitive content
