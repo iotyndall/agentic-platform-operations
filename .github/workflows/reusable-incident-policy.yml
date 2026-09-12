@@ -1,0 +1,179 @@
+name: Reusable deterministic incident repair policy
+
+on:
+  workflow_call:
+    inputs:
+      issue_number:
+        required: true
+        type: string
+      config_path:
+        required: false
+        type: string
+        default: '.agentic/platform-ops.json'
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: incident-policy-${{ github.repository }}-${{ inputs.issue_number }}
+  cancel-in-progress: false
+
+jobs:
+  policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ISSUE_NUMBER: ${{ inputs.issue_number }}
+      CONFIG_PATH: ${{ inputs.config_path }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          submodules: false
+
+      - name: Evaluate trusted incident metadata and triage evidence
+        id: evaluate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f "$CONFIG_PATH" || { echo '::error::Missing local platform-ops contract'; exit 1; }
+          jq -e --arg repo "$GITHUB_REPOSITORY" '.project.repository==$repo' "$CONFIG_PATH" >/dev/null
+          gh issue view "$ISSUE_NUMBER" --json number,state,url,body,author,labels,comments > "$RUNNER_TEMP/issue.json"
+          jq -e '.state=="OPEN" and ([.labels[].name]|index("kind:incident")!=null)' "$RUNNER_TEMP/issue.json" >/dev/null || {
+            echo '::error::Repair policy requires an open canonical incident.'; exit 1
+          }
+
+          python - "$RUNNER_TEMP/issue.json" "$RUNNER_TEMP/incident.json" "$RUNNER_TEMP/triage.json" <<'PY'
+          import json,re,sys
+          issue=json.load(open(sys.argv[1]))
+          incident_marker='<!-- agentic-incident:v1 '
+          triage_marker='<!-- agentic-triage:v1 -->'
+          incident_candidates=[]; triage_candidates=[]
+          def extract(body, marker):
+              if marker not in (body or ''): return None
+              m=re.search(r'```json\s*(\{.*?\})\s*```',body or '',re.S)
+              if not m: return None
+              try: return json.loads(m.group(1))
+              except Exception: return None
+          if issue.get('author',{}).get('login')=='github-actions[bot]':
+              d=extract(issue.get('body') or '',incident_marker)
+              if d: incident_candidates.append(d)
+          for c in issue.get('comments',[]):
+              if c.get('author',{}).get('login')!='github-actions[bot]': continue
+              body=c.get('body') or ''
+              d=extract(body,incident_marker)
+              if d: incident_candidates.append(d)
+              t=extract(body,triage_marker)
+              if t: triage_candidates.append(t)
+          if not incident_candidates: raise SystemExit('no bot-authored structured incident record found')
+          if not triage_candidates: raise SystemExit('no bot-authored triage evidence found')
+          json.dump(incident_candidates[-1],open(sys.argv[2],'w'),separators=(',',':'))
+          json.dump(triage_candidates[-1],open(sys.argv[3],'w'),separators=(',',':'))
+          PY
+
+          python - "$CONFIG_PATH" "$RUNNER_TEMP/incident.json" "$RUNNER_TEMP/triage.json" <<'PY' > "$RUNNER_TEMP/decision.json"
+          import json,re,sys
+          config=json.load(open(sys.argv[1])); incident=json.load(open(sys.argv[2])); triage=json.load(open(sys.argv[3]))
+          reasons=[]
+          repair=config.get('repair') or {}; project=config.get('project') or {}; automation=incident.get('automation') or {}
+          order={'low':0,'medium':1,'high':2}
+          minimum=repair.get('minimumConfidence','high')
+          monitor_conf=incident.get('confidence')
+          triage_conf=triage.get('confidence')
+          risk=triage.get('risk','critical')
+          authorized=True
+          def deny(reason):
+              nonlocal_box[0]=False; reasons.append(reason)
+          nonlocal_box=[True]
+          if repair.get('enabled') is not True or repair.get('reproductionRequired') is not True:
+              nonlocal_box[0]=False; reasons.append('test-first autonomous repair is disabled by project contract')
+          if int(project.get('autonomyLevel',0)) < 1:
+              nonlocal_box[0]=False; reasons.append('project autonomyLevel does not permit bounded repair')
+          if automation.get('repairEligible') is not True:
+              nonlocal_box[0]=False; reasons.append('trusted incident source did not mark repairEligible=true')
+          provenance=automation.get('provenance')
+          if not isinstance(provenance,str) or not provenance.strip():
+              nonlocal_box[0]=False; reasons.append('trusted automation provenance is missing')
+          pattern=repair.get('provenanceRegex') or ''
+          if pattern:
+              try: matched=bool(re.search(pattern,provenance or ''))
+              except re.error as exc: raise SystemExit(f'invalid repair.provenanceRegex: {exc}')
+              if not matched:
+                  nonlocal_box[0]=False; reasons.append('automation provenance does not satisfy project contract')
+          if monitor_conf not in order or order[monitor_conf] < order.get(minimum,2):
+              nonlocal_box[0]=False; reasons.append('trusted monitor confidence is below configured minimum')
+          if triage_conf not in order or order[triage_conf] < order.get(minimum,2):
+              nonlocal_box[0]=False; reasons.append('triage confidence is below configured minimum')
+          if triage.get('recommended_action')!='reproduce' or triage.get('reproduction_candidate') is not True:
+              nonlocal_box[0]=False; reasons.append('triage did not recommend executable reproduction')
+          if risk not in {'low','moderate'}:
+              nonlocal_box[0]=False; reasons.append('high/critical incident risk requires escalation')
+          if (incident.get('signal') or {}).get('type')=='security':
+              nonlocal_box[0]=False; reasons.append('security incidents are never autonomous repair candidates')
+          authorized=nonlocal_box[0]
+          if authorized: reasons.append('trusted eligibility, confidence, provenance, risk, and project contract permit bounded reproduction')
+          json.dump({
+              'version':1,
+              'authorized':authorized,
+              'risk':risk,
+              'monitor_confidence':monitor_conf,
+              'triage_confidence':triage_conf,
+              'minimum_confidence':minimum,
+              'autonomy_level':int(project.get('autonomyLevel',0)),
+              'provenance':provenance,
+              'reasons':reasons,
+          },sys.stdout,separators=(',',':'))
+          PY
+
+          echo "authorized=$(jq -r '.authorized' "$RUNNER_TEMP/decision.json")" >> "$GITHUB_OUTPUT"
+          echo "risk=$(jq -r '.risk' "$RUNNER_TEMP/decision.json")" >> "$GITHUB_OUTPUT"
+          echo "autonomy_level=$(jq -r '.autonomy_level' "$RUNNER_TEMP/decision.json")" >> "$GITHUB_OUTPUT"
+          echo "issue_url=$(jq -r '.url' "$RUNNER_TEMP/issue.json")" >> "$GITHUB_OUTPUT"
+
+      - name: Publish deterministic policy evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          BODY="$RUNNER_TEMP/policy-comment.md"
+          { echo '## Deterministic Incident Repair Policy'; echo; echo '<!-- agentic-repair-policy:v1 -->'; echo '```json'; cat "$RUNNER_TEMP/decision.json"; echo; echo '```'; echo; echo '_This decision is produced mechanically from trusted incident metadata, triage evidence, and the pinned local contract._'; } > "$BODY"
+          gh issue comment "$ISSUE_NUMBER" --body-file "$BODY"
+
+      - name: Authorize bounded reproduction through serialized operation state
+        if: steps.evaluate.outputs.authorized == 'true'
+        shell: bash
+        env:
+          RISK: ${{ steps.evaluate.outputs.risk }}
+          AUTONOMY_LEVEL: ${{ steps.evaluate.outputs.autonomy_level }}
+          ISSUE_URL: ${{ steps.evaluate.outputs.issue_url }}
+        run: |
+          set -euo pipefail
+          ISSUE_LABEL="$(jq -r '.repair.issueLabel' "$CONFIG_PATH")"
+          gh label create "$ISSUE_LABEL" --color 0e8a16 --description 'Deterministically authorized bounded reproduction candidate' --force >/dev/null 2>&1 || true
+          gh issue edit "$ISSUE_NUMBER" --add-label "$ISSUE_LABEL"
+
+          REPRO_EVENT_PAYLOAD="$(jq -nc --argjson issue "$ISSUE_NUMBER" --arg url "$ISSUE_URL" '{issue_number:$issue,issue_url:$url}')"
+          REPRO_STATE_PAYLOAD="$(jq -nc \
+            --argjson issue "$ISSUE_NUMBER" \
+            --argjson next_payload "$REPRO_EVENT_PAYLOAD" \
+            '{command:"transition",incident_issue:$issue,target_state:"reproducing",evidence:{reproduction:{branch:"auto-repro/"}},next_event_type:"agentic-auto-reproduce",next_payload:$next_payload}')"
+          DECISION_EVIDENCE="$(jq -nc --argjson level "$AUTONOMY_LEVEL" --arg risk "$RISK" '{decision:{autonomy_level:$level,risk:$risk,authorized:true}}')"
+          jq -n \
+            --argjson issue "$ISSUE_NUMBER" \
+            --argjson evidence "$DECISION_EVIDENCE" \
+            --argjson next_payload "$REPRO_STATE_PAYLOAD" \
+            '{event_type:"agentic-operation-state",client_payload:{command:"transition",incident_issue:$issue,target_state:"decided",evidence:$evidence,next_event_type:"agentic-operation-state",next_payload:$next_payload}}' \
+            | gh api --method POST "repos/$GITHUB_REPOSITORY/dispatches" --input -
+
+      - name: Escalate non-authorized reproduction recommendation
+        if: steps.evaluate.outputs.authorized != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          REASON="$(jq -r '.reasons | join("; ")' "$RUNNER_TEMP/decision.json")"
+          EVIDENCE="$(jq -nc --arg reason "$REASON" '{escalation:{reason:$reason}}')"
+          jq -n --argjson issue "$ISSUE_NUMBER" --argjson evidence "$EVIDENCE" \
+            '{event_type:"agentic-operation-state",client_payload:{command:"transition",incident_issue:$issue,target_state:"escalated",evidence:$evidence}}' \
+            | gh api --method POST "repos/$GITHUB_REPOSITORY/dispatches" --input -
+          gh label create policy:escalated --color b60205 --description 'Deterministic repair policy requires human handling' --force >/dev/null 2>&1 || true
+          gh issue edit "$ISSUE_NUMBER" --add-label policy:escalated

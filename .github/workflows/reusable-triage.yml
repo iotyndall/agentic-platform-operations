@@ -68,7 +68,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     permissions:
-      contents: read
+      contents: write
       issues: write
     env:
       GH_TOKEN: ${{ github.token }}
@@ -90,3 +90,31 @@ jobs:
           gh issue edit "$ISSUE_NUMBER" --add-label agent:triage-complete --add-label "triage:$ACTION"
           gh label create "risk:$RISK" --color fbca04 --description 'Triage risk classification' --force >/dev/null 2>&1 || true
           gh issue edit "$ISSUE_NUMBER" --add-label "risk:$RISK"
+
+      - name: Persist orientation before any policy decision
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s' "$TRIAGE_JSON" > "$RUNNER_TEMP/triage.json"
+          CONF_LABEL="$(jq -r '.confidence' "$RUNNER_TEMP/triage.json")"
+          case "$CONF_LABEL" in high) CONF=1 ;; medium) CONF=0.5 ;; low) CONF=0 ;; *) echo '::error::Invalid triage confidence'; exit 1 ;; esac
+          EVIDENCE="$(jq -nc \
+            --arg severity "$(jq -r '.severity' "$RUNNER_TEMP/triage.json")" \
+            --arg label "$CONF_LABEL" \
+            --argjson confidence "$CONF" \
+            '{classification:{kind:"incident",severity:$severity,confidence:$confidence,confidence_label:$label}}')"
+          ACTION="$(jq -r '.recommended_action' "$RUNNER_TEMP/triage.json")"
+          if [ "$ACTION" = reproduce ]; then
+            NEXT_TYPE=agentic-incident-policy
+            NEXT_PAYLOAD="$(jq -nc --argjson issue "$ISSUE_NUMBER" '{issue_number:$issue}')"
+          else
+            NEXT_TYPE=''
+            NEXT_PAYLOAD='{}'
+          fi
+          jq -n \
+            --argjson issue "$ISSUE_NUMBER" \
+            --argjson evidence "$EVIDENCE" \
+            --arg next "$NEXT_TYPE" \
+            --argjson next_payload "$NEXT_PAYLOAD" \
+            '{event_type:"agentic-operation-state",client_payload:{command:"transition",incident_issue:$issue,target_state:"oriented",evidence:$evidence,next_event_type:$next,next_payload:$next_payload}}' \
+            | gh api --method POST "repos/$GITHUB_REPOSITORY/dispatches" --input -

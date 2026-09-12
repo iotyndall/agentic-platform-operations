@@ -1,0 +1,126 @@
+name: Operation wiring CI
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/reusable-incident-intake.yml'
+      - '.github/workflows/reusable-triage.yml'
+      - '.github/workflows/reusable-incident-policy.yml'
+      - 'templates/project/.github/workflows/platform-incident-intake.yml'
+      - 'templates/project/.github/workflows/platform-triage.yml'
+      - 'templates/project/.github/workflows/platform-incident-policy.yml'
+      - 'templates/project/.github/workflows/platform-operation-state.yml'
+      - 'schemas/incident.schema.json'
+      - '.github/workflows/operation-wiring-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/reusable-incident-intake.yml'
+      - '.github/workflows/reusable-triage.yml'
+      - '.github/workflows/reusable-incident-policy.yml'
+      - 'templates/project/.github/workflows/platform-incident-intake.yml'
+      - 'templates/project/.github/workflows/platform-triage.yml'
+      - 'templates/project/.github/workflows/platform-incident-policy.yml'
+      - 'templates/project/.github/workflows/platform-operation-state.yml'
+      - 'schemas/incident.schema.json'
+      - '.github/workflows/operation-wiring-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  serialized-boundaries:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Parse changed YAML and incident schema
+        shell: bash
+        run: |
+          set -euo pipefail
+          ruby -e 'require "yaml"; %w[.github/workflows/reusable-incident-intake.yml .github/workflows/reusable-triage.yml .github/workflows/reusable-incident-policy.yml templates/project/.github/workflows/platform-incident-intake.yml templates/project/.github/workflows/platform-triage.yml templates/project/.github/workflows/platform-incident-policy.yml templates/project/.github/workflows/platform-operation-state.yml].each { |f| YAML.parse_file(f); puts "OK  #{f}" }'
+          python -m json.tool schemas/incident.schema.json >/dev/null
+
+      - name: Prove trusted eligibility is schema-level evidence
+        run: |
+          python - <<'PY'
+          import json
+          d=json.load(open('schemas/incident.schema.json'))
+          a=d['properties']['automation']
+          assert set(a['required']) == {'repairEligible','provenance'}
+          assert a['properties']['repairEligible']['type'] == 'boolean'
+          assert a['properties']['provenance']['minLength'] == 1
+          print('PASS trusted automation eligibility schema')
+          PY
+
+      - name: Prove model analysis remains read-only and publisher owns dispatch
+        run: |
+          python - <<'PY'
+          import re
+          from pathlib import Path
+          text=Path('.github/workflows/reusable-triage.yml').read_text()
+          lines=text.splitlines()
+          jobs_i=lines.index('jobs:')
+          blocks={}; current=None
+          for line in lines[jobs_i+1:]:
+              m=re.match(r'^  ([A-Za-z0-9_-]+):\s*$',line)
+              if m:
+                  current=m.group(1); blocks[current]=[line]
+              elif current is not None:
+                  if line and not line.startswith('  '): break
+                  blocks[current].append(line)
+          analyze='\n'.join(blocks['analyze']); publish='\n'.join(blocks['publish'])
+          assert 'anthropics/claude-code-action@' in analyze
+          assert re.search(r'^      contents: read$',analyze,re.M)
+          assert re.search(r'^      issues: read$',analyze,re.M)
+          assert not re.search(r'^      (contents|issues): write$',analyze,re.M)
+          assert 'anthropics/claude-code-action@' not in publish
+          assert re.search(r'^      contents: write$',publish,re.M)
+          assert re.search(r'^      issues: write$',publish,re.M)
+          assert 'agentic-operation-state' in publish
+          print('PASS triage reasoning and deterministic mutation remain separate')
+          PY
+
+      - name: Prove repair policy is deterministic and fail-closed
+        shell: bash
+        run: |
+          set -euo pipefail
+          f=.github/workflows/reusable-incident-policy.yml
+          ! grep -Eq 'anthropics/claude|openai/codex' "$f"
+          grep -Fq "repairEligible') is not True" "$f"
+          grep -Fq 'provenanceRegex' "$f"
+          grep -Fq "risk not in {'low','moderate'}" "$f"
+          grep -Fq "get('type')=='security'" "$f"
+          grep -Fq 'agentic-operation-state' "$f"
+          grep -Fq 'target_state:"decided"' "$f"
+          grep -Fq 'target_state:"reproducing"' "$f"
+          grep -Fq 'agentic-auto-reproduce' "$f"
+          echo 'PASS deterministic repair policy prerequisites and serialized reproduction chain'
+
+      - name: Prove state persistence serializes downstream dispatch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('templates/project/.github/workflows/platform-operation-state.yml').read_text()
+          assert 'contents: write' in p and 'issues: write' in p
+          assert 'gh api --paginate' in p
+          assert 'agentic-operation-state|agentic-triage|agentic-incident-policy|agentic-auto-reproduce|agentic-auto-repair|agentic-learning' in p
+          persist=p.index('Publish immutable next record as a bot-authored incident comment')
+          dispatch=p.index('Dispatch next stage only after durable state persistence')
+          assert persist < dispatch
+          assert 'repos/$GITHUB_REPOSITORY/dispatches' in p[dispatch:]
+          print('PASS operation state persistence precedes downstream dispatch')
+          PY
+
+      - name: Prove new project callers pin the central engine and grant only deterministic dispatch needs
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          for name in ['platform-incident-intake.yml','platform-triage.yml','platform-incident-policy.yml']:
+              p=Path('templates/project/.github/workflows')/name
+              text=p.read_text()
+              assert '@PINNED_REF' in text, name
+              assert 'contents: write' in text and 'issues: write' in text, name
+          print('PASS pinned callers expose deterministic dispatch authority')
+          PY

@@ -48,6 +48,16 @@
         "suspectedChange": {"type": "string"}
       }
     },
+    "automation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repairEligible", "provenance"],
+      "properties": {
+        "repairEligible": {"type": "boolean"},
+        "provenance": {"type": "string", "minLength": 1},
+        "reason": {"type": "string", "minLength": 1}
+      }
+    },
     "slo": {
       "type": "object",
       "additionalProperties": false,

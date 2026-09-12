@@ -13,7 +13,7 @@ on:
 jobs:
   intake:
     permissions:
-      contents: read
+      contents: write
       issues: write
     uses: iotyndall/agentic-platform-operations/.github/workflows/reusable-incident-intake.yml@PINNED_REF
     with:

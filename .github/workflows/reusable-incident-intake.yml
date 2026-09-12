@@ -20,7 +20,7 @@ on:
         value: ${{ jobs.intake.outputs.fingerprint_hash }}
 
 permissions:
-  contents: read
+  contents: write
   issues: write
 
 concurrency:
@@ -75,7 +75,6 @@ jobs:
         shell: bash
         env:
           FP_HASH: ${{ steps.validate.outputs.fingerprint_hash }}
-          DISPATCH_TRIAGE: ${{ inputs.dispatch_triage }}
         run: |
           set -euo pipefail
           FILE="$RUNNER_TEMP/incident.json"; MARKER="<!-- agentic-incident:v1 fp=$FP_HASH -->"
@@ -93,4 +92,60 @@ jobs:
             gh issue comment "$NUMBER" --body-file "$BODY"
           fi
           echo "issue_number=$NUMBER" >> "$GITHUB_OUTPUT"
-          if [ "$DISPATCH_TRIAGE" = true ]; then jq -n --argjson number "$NUMBER" '{event_type:"agentic-triage",client_payload:{issue_number:$number}}' | gh api --method POST "repos/$GITHUB_REPOSITORY/dispatches" --input -; fi
+
+      - name: Ensure operation genesis is durable before triage
+        env:
+          ISSUE_NUMBER: ${{ steps.route.outputs.issue_number }}
+          DISPATCH_TRIAGE: ${{ inputs.dispatch_triage }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$ISSUE_NUMBER/comments?per_page=100" --jq '.[]' > "$RUNNER_TEMP/comments.ndjson"
+          STATE="$(python - "$RUNNER_TEMP/comments.ndjson" <<'PY'
+          import json,re,sys
+          marker='<!-- agentic-operation-record:v1 -->'; state=''
+          for line in open(sys.argv[1],encoding='utf-8'):
+              line=line.strip()
+              if not line: continue
+              c=json.loads(line)
+              if c.get('user',{}).get('login')!='github-actions[bot]': continue
+              body=c.get('body') or ''
+              if marker not in body: continue
+              m=re.search(r'```json\s*(\{.*\})\s*```',body,re.S)
+              if not m: continue
+              try: state=json.loads(m.group(1)).get('state','')
+              except Exception: pass
+          print(state)
+          PY
+          )"
+
+          if [ -z "$STATE" ]; then
+            OPERATION_ID="$(jq -r '.incidentId' "$RUNNER_TEMP/incident.json")"
+            SOURCE_TYPE="$(jq -r '.signal.source' "$RUNNER_TEMP/incident.json")"
+            SIGNAL_SUMMARY="$(jq -r '.signal.summary' "$RUNNER_TEMP/incident.json")"
+            CURRENT_SHA="$(jq -r '.deployment.currentSha' "$RUNNER_TEMP/incident.json")"
+            FULL_SHA="$(gh api "repos/$GITHUB_REPOSITORY/commits/$CURRENT_SHA" --jq '.sha')"
+            printf '%s' "$FULL_SHA" | grep -Eq '^[0-9a-f]{40}$' || { echo '::error::Unable to resolve deployment.currentSha to a full repository SHA'; exit 1; }
+            if [ "$DISPATCH_TRIAGE" = true ]; then
+              NEXT_TYPE=agentic-triage
+              NEXT_PAYLOAD="$(jq -nc --argjson issue "$ISSUE_NUMBER" '{issue_number:$issue}')"
+            else
+              NEXT_TYPE=''
+              NEXT_PAYLOAD='{}'
+            fi
+            jq -n \
+              --argjson issue "$ISSUE_NUMBER" \
+              --arg operation "$OPERATION_ID" \
+              --arg source "$SOURCE_TYPE" \
+              --arg signal "$SIGNAL_SUMMARY" \
+              --arg sha "$FULL_SHA" \
+              --arg next "$NEXT_TYPE" \
+              --argjson next_payload "$NEXT_PAYLOAD" \
+              '{event_type:"agentic-operation-state",client_payload:{command:"init",incident_issue:$issue,operation_id:$operation,source_type:$source,signal:$signal,production_before_sha:$sha,next_event_type:$next,next_payload:$next_payload}}' \
+              | gh api --method POST "repos/$GITHUB_REPOSITORY/dispatches" --input -
+          elif [ "$STATE" = observed ] && [ "$DISPATCH_TRIAGE" = true ]; then
+            jq -n --argjson issue "$ISSUE_NUMBER" '{event_type:"agentic-triage",client_payload:{issue_number:$issue}}' \
+              | gh api --method POST "repos/$GITHUB_REPOSITORY/dispatches" --input -
+          else
+            echo "Incident is already bound to operation state '$STATE'; evidence was deduplicated without restarting triage."
+          fi
