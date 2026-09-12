@@ -18,6 +18,7 @@ from typing import Any
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 OP_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$")
 REPO_RE = re.compile(r"^[^/\s]+/[^/\s]+$")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 ACTIVE_STATES = (
     "observed",
@@ -97,6 +98,12 @@ def _require_sha(mapping: dict[str, Any], key: str) -> str:
     return value
 
 
+def _require_sha256(mapping: dict[str, Any], key: str) -> str:
+    value = _require_str(mapping, key)
+    _require(bool(SHA256_RE.fullmatch(value)), f"evidence field {key} must be a 64-character lowercase SHA-256")
+    return value
+
+
 def _build_event(
     *,
     sequence: int,
@@ -129,12 +136,18 @@ def init_record(
     _require(bool(OP_ID_RE.fullmatch(operation_id)), "invalid operation_id")
     _require(bool(REPO_RE.fullmatch(repository)), "repository must be owner/name")
     _require(isinstance(incident_issue, int) and incident_issue > 0, "incident_issue must be positive")
-    _require(bool(source_type.strip()), "source_type is required")
-    _require(bool(signal.strip()), "signal is required")
+    _require(isinstance(source_type, str) and bool(source_type.strip()), "source_type is required")
+    _require(isinstance(signal, str) and bool(signal.strip()), "signal is required")
     if production_before_sha is not None:
         _require(bool(SHA_RE.fullmatch(production_before_sha)), "production_before_sha must be a full SHA")
 
-    evidence: dict[str, Any] = {"source_type": source_type, "signal": signal}
+    evidence: dict[str, Any] = {
+        "operation_id": operation_id,
+        "repository": repository,
+        "incident_issue": incident_issue,
+        "source_type": source_type,
+        "signal": signal,
+    }
     if production_before_sha is not None:
         evidence["production_before_sha"] = production_before_sha
 
@@ -159,6 +172,7 @@ def init_record(
         "reviewed_sha": None,
         "deployed_sha": None,
         "prior_known_good_sha": None,
+        "resolution_path": None,
         "events": [event],
     }
     validate_record(record)
@@ -172,13 +186,13 @@ def _validate_transition_evidence(record: dict[str, Any], to_state: str, evidenc
         _require_str(classification, "kind")
         _require_str(classification, "severity")
         confidence = classification.get("confidence")
-        _require(isinstance(confidence, (int, float)) and 0 <= confidence <= 1, "classification.confidence must be 0..1")
+        _require(isinstance(confidence, (int, float)) and not isinstance(confidence, bool) and 0 <= confidence <= 1, "classification.confidence must be 0..1")
 
     elif to_state == "decided":
         decision = evidence.get("decision")
         _require(isinstance(decision, dict), "decided requires decision evidence")
         level = decision.get("autonomy_level")
-        _require(isinstance(level, int) and 0 <= level <= 3, "decision.autonomy_level must be 0..3")
+        _require(isinstance(level, int) and not isinstance(level, bool) and 0 <= level <= 3, "decision.autonomy_level must be 0..3")
         _require_str(decision, "risk")
         _require_bool(decision, "authorized", True)
 
@@ -241,7 +255,7 @@ def _validate_transition_evidence(record: dict[str, Any], to_state: str, evidenc
         _require_str(probation, "started_at")
         checks = probation.get("required_checks")
         _require(
-            isinstance(checks, list) and len(checks) > 0 and all(isinstance(x, str) and x for x in checks),
+            isinstance(checks, list) and len(checks) > 0 and all(isinstance(x, str) and bool(x.strip()) for x in checks),
             "probation.required_checks must be a nonempty string array",
         )
 
@@ -251,8 +265,7 @@ def _validate_transition_evidence(record: dict[str, Any], to_state: str, evidenc
         verified = _require_sha(verification, "sha")
         _require(verified == record["deployed_sha"], "production verification must bind deployed SHA")
         _require(verification.get("result") == "PASS", "production verification must PASS")
-        _require_str(verification, "evidence_sha256")
-        _require(bool(re.fullmatch(r"[0-9a-f]{64}", verification["evidence_sha256"])), "verification evidence hash must be sha256")
+        _require_sha256(verification, "evidence_sha256")
 
     elif to_state == "rollback_authorized":
         rollback = evidence.get("rollback")
@@ -277,19 +290,24 @@ def _validate_transition_evidence(record: dict[str, Any], to_state: str, evidenc
         verified = _require_sha(verification, "sha")
         _require(verified == record["prior_known_good_sha"], "recovery verification must bind rollback target SHA")
         _require(verification.get("result") == "PASS", "recovery verification must PASS")
-        _require_str(verification, "evidence_sha256")
-        _require(bool(re.fullmatch(r"[0-9a-f]{64}", verification["evidence_sha256"])), "verification evidence hash must be sha256")
+        _require_sha256(verification, "evidence_sha256")
 
     elif to_state == "learning":
         learning = evidence.get("learning")
         _require(isinstance(learning, dict), "learning requires learning evidence")
-        _require(bool(learning.get("lesson_id") or learning.get("summary")), "learning requires lesson_id or summary")
-        _require(bool(learning.get("durable_improvement")), "learning requires a durable_improvement reference")
+        lesson_id = learning.get("lesson_id")
+        summary = learning.get("summary")
+        has_lesson = isinstance(lesson_id, str) and bool(lesson_id.strip())
+        has_summary = isinstance(summary, str) and bool(summary.strip())
+        _require(has_lesson or has_summary, "learning requires a nonempty lesson_id or summary")
+        _require_str(learning, "durable_improvement")
 
     elif to_state == "closed":
         closure = evidence.get("closure")
         _require(isinstance(closure, dict), "closed requires closure evidence")
-        _require(closure.get("resolution") in {"healthy", "rolled_back"}, "closure resolution must be healthy or rolled_back")
+        expected = record.get("resolution_path")
+        _require(expected in {"healthy", "rolled_back"}, "closure requires a deterministically bound resolution path")
+        _require(closure.get("resolution") == expected, f"closure resolution must match completed path: {expected}")
         _require_str(closure, "summary")
 
     elif to_state == "escalated":
@@ -298,7 +316,13 @@ def _validate_transition_evidence(record: dict[str, Any], to_state: str, evidenc
         _require_str(escalation, "reason")
 
 
-def _apply_bound_fields(record: dict[str, Any], to_state: str, evidence: dict[str, Any]) -> None:
+def _apply_bound_fields(
+    record: dict[str, Any],
+    to_state: str,
+    evidence: dict[str, Any],
+    *,
+    from_state: str | None = None,
+) -> None:
     if to_state == "evidence_frozen":
         record["reproduction_sha"] = evidence["reproduction"]["sha"]
     elif to_state == "verifying":
@@ -309,6 +333,13 @@ def _apply_bound_fields(record: dict[str, Any], to_state: str, evidence: dict[st
         record["deployed_sha"] = evidence["deployment"]["sha"]
     elif to_state == "rollback_authorized":
         record["prior_known_good_sha"] = evidence["rollback"]["prior_known_good_sha"]
+    elif to_state == "learning":
+        if from_state == "healthy":
+            record["resolution_path"] = "healthy"
+        elif from_state == "recovery_verified":
+            record["resolution_path"] = "rolled_back"
+        else:
+            raise OperationError("learning must follow healthy or recovery_verified")
 
 
 def transition_record(
@@ -340,7 +371,7 @@ def transition_record(
     updated["events"].append(event)
     updated["state"] = to_state
     updated["sequence"] = sequence
-    _apply_bound_fields(updated, to_state, evidence)
+    _apply_bound_fields(updated, to_state, evidence, from_state=current)
     validate_record(updated)
     return updated
 
@@ -352,19 +383,24 @@ def validate_record(record: dict[str, Any]) -> None:
     _require(bool(REPO_RE.fullmatch(str(record.get("repository", "")))), "invalid repository")
     _require(isinstance(record.get("incident_issue"), int) and record["incident_issue"] > 0, "invalid incident_issue")
     _require(record.get("state") in ALL_STATES, "invalid state")
+    _require(record.get("resolution_path") in {None, "healthy", "rolled_back"}, "invalid resolution_path")
     events = record.get("events")
     _require(isinstance(events, list) and len(events) >= 1, "events must be a nonempty array")
     _require(record.get("sequence") == len(events) - 1, "record sequence does not match event count")
 
     prior_digest = None
     prior_state = None
-    replay = {
+    replay: dict[str, Any] = {
+        "operation_id": None,
+        "repository": None,
+        "incident_issue": None,
         "production_before_sha": None,
         "reproduction_sha": None,
         "candidate_sha": None,
         "reviewed_sha": None,
         "deployed_sha": None,
         "prior_known_good_sha": None,
+        "resolution_path": None,
     }
     for idx, event in enumerate(events):
         _require(isinstance(event, dict), f"event {idx} must be an object")
@@ -389,14 +425,26 @@ def validate_record(record: dict[str, Any]) -> None:
         digest = _event_digest(base)
         _require(event.get("event_sha256") == digest, f"event {idx} digest mismatch")
         if idx == 0:
-            event_evidence = event.get("evidence") or {}
+            event_evidence = event.get("evidence")
+            _require(isinstance(event_evidence, dict), "genesis evidence must be an object")
+            operation_id = _require_str(event_evidence, "operation_id")
+            repository = _require_str(event_evidence, "repository")
+            incident_issue = event_evidence.get("incident_issue")
+            _require(bool(OP_ID_RE.fullmatch(operation_id)), "invalid genesis operation_id")
+            _require(bool(REPO_RE.fullmatch(repository)), "invalid genesis repository")
+            _require(isinstance(incident_issue, int) and incident_issue > 0, "invalid genesis incident_issue")
+            _require_str(event_evidence, "source_type")
+            _require_str(event_evidence, "signal")
+            replay["operation_id"] = operation_id
+            replay["repository"] = repository
+            replay["incident_issue"] = incident_issue
             if event_evidence.get("production_before_sha") is not None:
                 _require(bool(SHA_RE.fullmatch(event_evidence["production_before_sha"])), "invalid initial production SHA")
                 replay["production_before_sha"] = event_evidence["production_before_sha"]
         else:
             shadow = {**record, **replay, "state": prior_state}
             _validate_transition_evidence(shadow, to_state, event.get("evidence") or {})
-            _apply_bound_fields(replay, to_state, event.get("evidence") or {})
+            _apply_bound_fields(replay, to_state, event.get("evidence") or {}, from_state=prior_state)
         prior_digest = digest
         prior_state = to_state
 
@@ -442,7 +490,7 @@ def main(argv: list[str] | None = None) -> int:
     trans.add_argument("--actor", default="deterministic-controller")
     trans.add_argument("--output")
 
-    val = sub.add_parser("validate", help="validate structure, hash chain, state path, and SHA bindings")
+    val = sub.add_parser("validate", help="validate structure, hash chain, state path, identity, and SHA bindings")
     val.add_argument("--record", required=True)
 
     args = parser.parse_args(argv)
