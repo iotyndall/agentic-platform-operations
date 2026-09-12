@@ -1,0 +1,19 @@
+name: Platform Incident Repair Policy
+
+on:
+  repository_dispatch:
+    types: [agentic-incident-policy]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        required: true
+        type: string
+
+jobs:
+  policy:
+    permissions:
+      contents: write
+      issues: write
+    uses: iotyndall/agentic-platform-operations/.github/workflows/reusable-incident-policy.yml@PINNED_REF
+    with:
+      issue_number: ${{ github.event.client_payload.issue_number || inputs.issue_number }}
