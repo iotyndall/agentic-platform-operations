@@ -39,9 +39,19 @@ on:
         required: false
         type: string
         default: '{}'
+      next_event_type:
+        description: Optional allowlisted repository_dispatch event emitted only after persistence succeeds
+        required: false
+        type: string
+        default: ''
+      next_payload_json:
+        description: Optional JSON object for the allowlisted next event
+        required: false
+        type: string
+        default: '{}'
 
 permissions:
-  contents: read
+  contents: write
   issues: write
 
 concurrency:
@@ -62,6 +72,8 @@ jobs:
       PRODUCTION_BEFORE_SHA: ${{ github.event.client_payload.production_before_sha || inputs.production_before_sha }}
       TARGET_STATE: ${{ github.event.client_payload.target_state || inputs.target_state }}
       EVIDENCE_JSON: ${{ toJSON(github.event.client_payload.evidence || fromJSON(inputs.evidence_json || '{}')) }}
+      NEXT_EVENT_TYPE: ${{ github.event.client_payload.next_event_type || inputs.next_event_type }}
+      NEXT_PAYLOAD_JSON: ${{ toJSON(github.event.client_payload.next_payload || fromJSON(inputs.next_payload_json || '{}')) }}
     steps:
       - name: Validate request and load latest bot-authored operation record
         id: prep
@@ -73,13 +85,15 @@ jobs:
           gh issue view "$INCIDENT_ISSUE" --repo "$GITHUB_REPOSITORY" --json number,state,labels > "$RUNNER_TEMP/issue.json"
           jq -e '.state == "OPEN"' "$RUNNER_TEMP/issue.json" >/dev/null || { echo '::error::Operation state may only advance on an open incident'; exit 1; }
 
-          gh api "repos/$GITHUB_REPOSITORY/issues/$INCIDENT_ISSUE/comments?per_page=100" > "$RUNNER_TEMP/comments.json"
-          python - "$RUNNER_TEMP/comments.json" "$RUNNER_TEMP/operation.json" <<'PY'
+          gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$INCIDENT_ISSUE/comments?per_page=100" --jq '.[]' > "$RUNNER_TEMP/comments.ndjson"
+          python - "$RUNNER_TEMP/comments.ndjson" "$RUNNER_TEMP/operation.json" <<'PY'
           import json,re,sys
-          comments=json.load(open(sys.argv[1]))
           marker='<!-- agentic-operation-record:v1 -->'
           found=[]
-          for c in comments:
+          for line in open(sys.argv[1],encoding='utf-8'):
+              line=line.strip()
+              if not line: continue
+              c=json.loads(line)
               if c.get('user',{}).get('login')!='github-actions[bot]': continue
               body=c.get('body') or ''
               if marker not in body: continue
@@ -104,11 +118,19 @@ jobs:
 
           python - <<'PY'
           import json,os
-          value=os.environ.get('EVIDENCE_JSON','{}')
-          data=json.loads(value)
-          if not isinstance(data,dict): raise SystemExit('evidence must be a JSON object')
-          json.dump(data,open(os.environ['RUNNER_TEMP']+'/evidence.json','w'),separators=(',',':'))
+          for env_name,filename in [('EVIDENCE_JSON','evidence.json'),('NEXT_PAYLOAD_JSON','next-payload.json')]:
+              data=json.loads(os.environ.get(env_name,'{}'))
+              if not isinstance(data,dict): raise SystemExit(f'{env_name} must be a JSON object')
+              json.dump(data,open(os.environ['RUNNER_TEMP']+'/'+filename,'w'),separators=(',',':'))
           PY
+
+          if [ -n "$NEXT_EVENT_TYPE" ]; then
+            case "$NEXT_EVENT_TYPE" in
+              agentic-operation-state|agentic-triage|agentic-incident-policy|agentic-auto-reproduce|agentic-auto-repair|agentic-learning) ;;
+              *) echo "::error::next_event_type is not allowlisted: $NEXT_EVENT_TYPE"; exit 1 ;;
+            esac
+            test "$COMMAND" != validate || { echo '::error::validate may not dispatch a downstream event'; exit 1; }
+          fi
 
       - name: Initialize operation
         if: env.COMMAND == 'init'
@@ -158,3 +180,12 @@ jobs:
             echo '_Machine-authored evidence record. Agents cannot edit state directly._'
           } > "$BODY"
           jq -Rs '{body:.}' "$BODY" | gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$INCIDENT_ISSUE/comments" --input - >/dev/null
+
+      - name: Dispatch next stage only after durable state persistence
+        if: env.COMMAND != 'validate' && env.NEXT_EVENT_TYPE != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -n --arg event_type "$NEXT_EVENT_TYPE" --slurpfile payload "$RUNNER_TEMP/next-payload.json" \
+            '{event_type:$event_type,client_payload:$payload[0]}' \
+            | gh api --method POST "repos/$GITHUB_REPOSITORY/dispatches" --input -
