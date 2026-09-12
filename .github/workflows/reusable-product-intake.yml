@@ -63,7 +63,8 @@ jobs:
           set -euo pipefail
           printf '%s' "$SPEC" > "$RUNNER_TEMP/spec.json"
           jq -e '.issue_kind=="feature" and (.problem|length>0) and (.desired_outcome|length>0) and (.acceptance_criteria|length>0) and (.success_metrics|length>0)' "$RUNNER_TEMP/spec.json" >/dev/null
-          { echo 'spec_json<<__SPEC__'; cat "$RUNNER_TEMP/spec.json"; echo '__SPEC__'; } >> "$GITHUB_OUTPUT"
+          COMPACT="$(jq -c . "$RUNNER_TEMP/spec.json")"
+          printf 'spec_json=%s\n' "$COMPACT" >> "$GITHUB_OUTPUT"
 
   adversarial-review:
     needs: draft
@@ -111,7 +112,8 @@ jobs:
           D="$(jq -r '.disposition' "$F")"; R="$(jq -r '.engineering_ready' "$F")"
           case "$D" in PASS|REVISE|ESCALATE) ;; *) exit 1 ;; esac
           if [ "$D" = PASS ]; then test "$R" = true; else test "$R" = false; fi
-          { echo 'review_json<<__REVIEW__'; cat "$F"; echo '__REVIEW__'; } >> "$GITHUB_OUTPUT"
+          COMPACT="$(jq -c . "$F")"
+          printf 'review_json=%s\n' "$COMPACT" >> "$GITHUB_OUTPUT"
 
   publish:
     needs: [draft, adversarial-review]
@@ -122,6 +124,7 @@ jobs:
       issues: write
     env:
       GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
       ISSUE_NUMBER: ${{ inputs.issue_number }}
       SPEC_JSON: ${{ needs.draft.outputs.spec_json }}
       REVIEW_JSON: ${{ needs.adversarial-review.outputs.review_json }}
