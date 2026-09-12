@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from copy import deepcopy
 
-from operation_controller import OperationError, init_record, transition_record, validate_record
+from operation_controller import (
+    OperationError,
+    _event_digest,
+    init_record,
+    transition_record,
+    validate_record,
+)
 
 A = "a" * 40
 B = "b" * 40
@@ -19,6 +25,18 @@ def must_fail(fn, contains: str) -> None:
         assert contains in str(exc), (contains, str(exc))
     else:
         raise AssertionError(f"expected failure containing: {contains}")
+
+
+def redigest(event: dict) -> None:
+    base = {
+        "sequence": event.get("sequence"),
+        "from": event.get("from"),
+        "to": event.get("to"),
+        "actor": event.get("actor"),
+        "evidence": event.get("evidence"),
+        "previous_event_sha256": event.get("previous_event_sha256"),
+    }
+    event["event_sha256"] = _event_digest(base)
 
 
 def base_record():
@@ -66,14 +84,19 @@ def through_probation():
     })
 
 
-def test_happy_path() -> None:
+def healthy_learning_record():
     r = through_probation()
     r = transition_record(r, to_state="healthy", evidence={
         "verification": {"sha": C, "result": "PASS", "evidence_sha256": H}
     })
-    r = transition_record(r, to_state="learning", evidence={
+    return transition_record(r, to_state="learning", evidence={
         "learning": {"lesson_id": "lesson-42", "durable_improvement": "monitor:booking-journey-v2"}
     })
+
+
+def test_happy_path() -> None:
+    r = healthy_learning_record()
+    assert r["resolution_path"] == "healthy"
     r = transition_record(r, to_state="closed", evidence={
         "closure": {"resolution": "healthy", "summary": "Candidate remained healthy through probation."}
     })
@@ -101,6 +124,7 @@ def test_rollback_path() -> None:
     r = transition_record(r, to_state="learning", evidence={
         "learning": {"summary": "Rollback restored the critical journey.", "durable_improvement": "test:regression-42"}
     })
+    assert r["resolution_path"] == "rolled_back"
     r = transition_record(r, to_state="closed", evidence={
         "closure": {"resolution": "rolled_back", "summary": "Production restored to prior known-good release."}
     })
@@ -161,6 +185,23 @@ def test_tampered_chain_fails() -> None:
     must_fail(lambda: validate_record(tampered), "digest mismatch")
 
 
+def test_relabelled_operation_identity_fails() -> None:
+    r = through_probation()
+    tampered = deepcopy(r)
+    tampered["operation_id"] = "op-other-999"
+    tampered["repository"] = "other/service"
+    tampered["incident_issue"] = 99
+    must_fail(lambda: validate_record(tampered), "top-level bound field operation_id")
+
+
+def test_missing_genesis_evidence_fails_even_with_valid_digest() -> None:
+    r = base_record()
+    tampered = deepcopy(r)
+    del tampered["events"][0]["evidence"]["source_type"]
+    redigest(tampered["events"][0])
+    must_fail(lambda: validate_record(tampered), "source_type")
+
+
 def test_rollback_target_mismatch_fails() -> None:
     r = through_probation()
     r = transition_record(r, to_state="rollback_authorized", evidence={
@@ -176,6 +217,42 @@ def test_rollback_target_mismatch_fails() -> None:
             "rollback": {"target_sha": B, "result": "success"}
         }),
         "authorized prior-known-good SHA",
+    )
+
+
+def test_closure_resolution_must_match_path() -> None:
+    r = healthy_learning_record()
+    must_fail(
+        lambda: transition_record(r, to_state="closed", evidence={
+            "closure": {"resolution": "rolled_back", "summary": "Incorrect terminal classification."}
+        }),
+        "match completed path: healthy",
+    )
+
+
+def test_learning_requires_string_lesson_or_summary() -> None:
+    r = through_probation()
+    r = transition_record(r, to_state="healthy", evidence={
+        "verification": {"sha": C, "result": "PASS", "evidence_sha256": H}
+    })
+    must_fail(
+        lambda: transition_record(r, to_state="learning", evidence={
+            "learning": {"summary": True, "durable_improvement": "monitor:fixed"}
+        }),
+        "nonempty lesson_id or summary",
+    )
+
+
+def test_learning_requires_string_durable_improvement() -> None:
+    r = through_probation()
+    r = transition_record(r, to_state="healthy", evidence={
+        "verification": {"sha": C, "result": "PASS", "evidence_sha256": H}
+    })
+    must_fail(
+        lambda: transition_record(r, to_state="learning", evidence={
+            "learning": {"summary": "Verified lesson", "durable_improvement": True}
+        }),
+        "durable_improvement",
     )
 
 
@@ -201,7 +278,12 @@ def main() -> None:
         test_stale_review_sha_fails,
         test_release_sha_mismatch_fails,
         test_tampered_chain_fails,
+        test_relabelled_operation_identity_fails,
+        test_missing_genesis_evidence_fails_even_with_valid_digest,
         test_rollback_target_mismatch_fails,
+        test_closure_resolution_must_match_path,
+        test_learning_requires_string_lesson_or_summary,
+        test_learning_requires_string_durable_improvement,
         test_escalation_is_terminal,
     ]
     for test in tests:
