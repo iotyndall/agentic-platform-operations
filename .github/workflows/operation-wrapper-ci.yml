@@ -1,0 +1,41 @@
+name: Operation wrapper CI
+
+on:
+  pull_request:
+    paths:
+      - '.github/actions/operation-controller/action.yml'
+      - 'templates/project/.github/workflows/platform-operation-state.yml'
+      - '.github/workflows/operation-wrapper-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - '.github/actions/operation-controller/action.yml'
+      - 'templates/project/.github/workflows/platform-operation-state.yml'
+      - '.github/workflows/operation-wrapper-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  wrapper-proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Parse action and caller YAML
+        shell: bash
+        run: |
+          set -euo pipefail
+          ruby -e 'require "yaml"; [".github/actions/operation-controller/action.yml", "templates/project/.github/workflows/platform-operation-state.yml"].each { |f| YAML.parse_file(f); puts "OK  #{f}" }'
+
+      - name: Assert pinned action and bot-only persistence marker
+        shell: bash
+        run: |
+          set -euo pipefail
+          f=templates/project/.github/workflows/platform-operation-state.yml
+          grep -Fq 'operation-controller@PINNED_REF' "$f"
+          grep -Fq '<!-- agentic-operation-record:v1 -->' "$f"
+          grep -Fq 'github-actions[bot]' "$f"
+          grep -Fq 'permissions:' "$f"
+          echo 'PASS thin persistence workflow is pinned and explicit about authority'
