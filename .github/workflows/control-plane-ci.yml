@@ -112,16 +112,18 @@ jobs:
           ! grep -R -Fq 'spec_json<<__SPEC__' .github/workflows
           ! grep -R -Fq 'triage_json<<__TRIAGE__' .github/workflows
           ! grep -R -Fq 'learning_json<<__LEARNING__' .github/workflows
-          for f in reusable-engineering-review.yml reusable-product-intake.yml reusable-triage.yml reusable-issue-router.yml reusable-incident-intake.yml; do
-            grep -Fq 'GH_REPO: ${{ github.repository }}' ".github/workflows/$f"
-          done
           python - <<'PY'
           import json
+          from pathlib import Path
+          needle='GH_REPO: $'+'{{ github.repository }}'
+          for name in ['reusable-engineering-review.yml','reusable-product-intake.yml','reusable-triage.yml','reusable-issue-router.yml','reusable-incident-intake.yml']:
+              text=(Path('.github/workflows')/name).read_text()
+              assert needle in text, f'{name} missing literal repository binding'
           sample={"disposition":"ESCALATE","summary":"contains __REVIEW__ and\nnewlines","engineering_ready":False}
           compact=json.dumps(sample,separators=(',',':'))
           assert '\n' not in compact
           assert json.loads(compact)==sample
-          print('PASS structured outputs survive arbitrary model text as single-line JSON')
+          print('PASS structured outputs and explicit repository context are durable')
           PY
 
       - name: Assert model analysis and deterministic mutation are separate jobs
