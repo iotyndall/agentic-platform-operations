@@ -1,0 +1,102 @@
+name: Deterministic operation controller
+description: Validate or advance a Platform Ops operation record without repository or deployment authority.
+
+inputs:
+  command:
+    description: init, transition, or validate
+    required: true
+  record_file:
+    description: Existing operation-record JSON path for transition/validate
+    required: false
+    default: ''
+  evidence_file:
+    description: Evidence JSON path for transition
+    required: false
+    default: ''
+  output_file:
+    description: Output path for init/transition
+    required: false
+    default: ''
+  operation_id:
+    required: false
+    default: ''
+  repository:
+    required: false
+    default: ''
+  incident_issue:
+    required: false
+    default: ''
+  source_type:
+    required: false
+    default: ''
+  signal:
+    required: false
+    default: ''
+  production_before_sha:
+    required: false
+    default: ''
+  target_state:
+    required: false
+    default: ''
+
+outputs:
+  state:
+    description: Validated resulting operation state
+    value: ${{ steps.controller.outputs.state }}
+  event_sha256:
+    description: Digest of the latest operation event
+    value: ${{ steps.controller.outputs.event_sha256 }}
+
+runs:
+  using: composite
+  steps:
+    - id: controller
+      shell: bash
+      env:
+        INPUT_COMMAND: ${{ inputs.command }}
+        INPUT_RECORD: ${{ inputs.record_file }}
+        INPUT_EVIDENCE: ${{ inputs.evidence_file }}
+        INPUT_OUTPUT: ${{ inputs.output_file }}
+        INPUT_OPERATION_ID: ${{ inputs.operation_id }}
+        INPUT_REPOSITORY: ${{ inputs.repository }}
+        INPUT_INCIDENT_ISSUE: ${{ inputs.incident_issue }}
+        INPUT_SOURCE_TYPE: ${{ inputs.source_type }}
+        INPUT_SIGNAL: ${{ inputs.signal }}
+        INPUT_PRODUCTION_BEFORE_SHA: ${{ inputs.production_before_sha }}
+        INPUT_TARGET_STATE: ${{ inputs.target_state }}
+      run: |
+        set -euo pipefail
+        controller="$GITHUB_ACTION_PATH/../../../scripts/operation_controller.py"
+        test -f "$controller" || { echo '::error::operation controller script is missing from action package'; exit 1; }
+
+        case "$INPUT_COMMAND" in
+          init)
+            test -n "$INPUT_OUTPUT" || { echo '::error::output_file is required for init'; exit 1; }
+            args=(init --operation-id "$INPUT_OPERATION_ID" --repository "$INPUT_REPOSITORY" --incident-issue "$INPUT_INCIDENT_ISSUE" --source-type "$INPUT_SOURCE_TYPE" --signal "$INPUT_SIGNAL" --output "$INPUT_OUTPUT")
+            if [ -n "$INPUT_PRODUCTION_BEFORE_SHA" ]; then args+=(--production-before-sha "$INPUT_PRODUCTION_BEFORE_SHA"); fi
+            python "$controller" "${args[@]}"
+            result="$INPUT_OUTPUT"
+            ;;
+          transition)
+            test -f "$INPUT_RECORD" || { echo '::error::record_file is required for transition'; exit 1; }
+            test -f "$INPUT_EVIDENCE" || { echo '::error::evidence_file is required for transition'; exit 1; }
+            test -n "$INPUT_OUTPUT" || { echo '::error::output_file is required for transition'; exit 1; }
+            python "$controller" transition --record "$INPUT_RECORD" --to "$INPUT_TARGET_STATE" --evidence "$INPUT_EVIDENCE" --actor github-actions[bot] --output "$INPUT_OUTPUT"
+            result="$INPUT_OUTPUT"
+            ;;
+          validate)
+            test -f "$INPUT_RECORD" || { echo '::error::record_file is required for validate'; exit 1; }
+            python "$controller" validate --record "$INPUT_RECORD"
+            result="$INPUT_RECORD"
+            ;;
+          *)
+            echo '::error::command must be init, transition, or validate'
+            exit 1
+            ;;
+        esac
+
+        state="$(jq -r '.state' "$result")"
+        digest="$(jq -r '.events[-1].event_sha256' "$result")"
+        printf '%s' "$digest" | grep -Eq '^[0-9a-f]{64}$' || { echo '::error::controller did not emit a valid event digest'; exit 1; }
+        echo "state=$state" >> "$GITHUB_OUTPUT"
+        echo "event_sha256=$digest" >> "$GITHUB_OUTPUT"
