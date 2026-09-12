@@ -51,7 +51,18 @@ The controller intentionally does not support skipping intermediate states. A su
 
 ## Immutable bindings
 
-The record binds six important code identities:
+The genesis event binds the operation's identity as hashed evidence:
+
+- `operation_id`;
+- `repository`;
+- `incident_issue`;
+- `source_type`;
+- `signal`;
+- optional `production_before_sha`.
+
+The validator replays those values from the genesis event and compares them with the top-level record. A complete evidence chain therefore cannot be relabeled onto a different operation, repository, or incident without invalidating validation.
+
+The record then binds six important code identities:
 
 - `production_before_sha` — release believed healthy before the operation;
 - `reproduction_sha` — immutable red reproduction evidence;
@@ -64,11 +75,20 @@ Transitions enforce identity, not branch names. Repair must consume the exact fr
 
 A branch moving after review therefore invalidates the evidence chain rather than silently inheriting approval.
 
+## Deterministic terminal outcome
+
+The controller also binds `resolution_path` when the operation enters `learning`:
+
+- `healthy` when learning follows a healthy production probation;
+- `rolled_back` when learning follows `recovery_verified`.
+
+Closure evidence must match that bound path. The terminal result therefore cannot be rewritten later as a different outcome merely by changing the closure summary.
+
 ## Hash-chained event history
 
 Every operation transition appends an event containing its sequence number, prior and next states, deterministic actor identity, evidence object, previous event SHA-256, and current event SHA-256.
 
-The digest is calculated over canonical JSON excluding the event's own digest. The controller replays the complete history on every validation. If earlier evidence, a state, sequence number, or digest link changes, validation fails.
+The digest is calculated over canonical JSON excluding the event's own digest. The controller replays the complete history on every validation. If earlier evidence, a state, sequence number, identity field, or digest link changes, validation fails.
 
 This is tamper-evident rather than a replacement for GitHub audit logs or cryptographic artifact attestation. Later versions can sign or attest the event chain without changing the state-machine semantics.
 
@@ -76,6 +96,7 @@ This is tamper-evident rather than a replacement for GitHub audit logs or crypto
 
 | Target state | Minimum deterministic evidence |
 | --- | --- |
+| `observed` | operation/repository/incident identity + source type + signal + optional known-good production SHA |
 | `oriented` | kind, severity, confidence |
 | `decided` | autonomy level, risk, authorization |
 | `reproducing` | reproduction branch |
@@ -90,8 +111,8 @@ This is tamper-evident rather than a replacement for GitHub audit logs or crypto
 | `rollback_authorized` | deployed SHA + distinct prior-known-good SHA + authorization + schema compatibility |
 | `rolled_back` | successful rollback to authorized target |
 | `recovery_verified` | PASS production verification bound to rollback target |
-| `learning` | lesson/summary + durable improvement reference |
-| `closed` | healthy or rolled-back resolution + summary |
+| `learning` | nonempty lesson/summary + nonempty durable improvement reference; controller binds resolution path |
+| `closed` | resolution matching the bound completed path + summary |
 | `escalated` | explicit escalation reason |
 
 These checks complement, rather than replace, the existing release, rollback, security, SLO, and environment gates.
@@ -127,7 +148,7 @@ Validate a persisted record:
 python scripts/operation_controller.py validate --record operation.json
 ```
 
-The command exits non-zero on malformed JSON, a broken hash chain, an illegal state transition, stale SHA evidence, missing evidence, or top-level fields that disagree with replayed history.
+The command exits non-zero on malformed JSON, a broken hash chain, an illegal state transition, stale SHA evidence, missing genesis or transition evidence, identity relabeling, closure-path mismatch, or top-level fields that disagree with replayed history.
 
 ## Production probation
 
