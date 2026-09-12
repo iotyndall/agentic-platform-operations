@@ -15,7 +15,7 @@ jobs:
     uses: iotyndall/agentic-platform-operations/.github/workflows/reusable-pr-deterministic-gate.yml@PINNED_REF
 
   independent-review:
-    if: github.event.pull_request.draft == false && needs.deterministic-gate.outputs.risk != 'low'
+    if: github.event.pull_request.draft == false
     needs: [deterministic-gate]
     uses: iotyndall/agentic-platform-operations/.github/workflows/reusable-engineering-review.yml@PINNED_REF
     with:
