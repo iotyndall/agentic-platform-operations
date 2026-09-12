@@ -12,7 +12,7 @@ on:
 jobs:
   triage:
     permissions:
-      contents: read
+      contents: write
       issues: write
     uses: iotyndall/agentic-platform-operations/.github/workflows/reusable-triage.yml@PINNED_REF
     with:
