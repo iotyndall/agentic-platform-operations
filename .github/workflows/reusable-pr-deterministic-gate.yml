@@ -135,7 +135,7 @@ jobs:
             echo "**Risk:** $RISK"
             echo "**Changed files:** $COUNT"
             echo
-            echo 'Low-risk changes still run the complete deterministic gate. Independent AI review is reserved for moderate/high changes.'
+            echo 'Low-risk changes still run the complete deterministic gate. Independent AI review remains a separate required gate for every governed non-draft PR.'
             echo
             echo '```text'
             cat "$RUNNER_TEMP/changed.txt"
