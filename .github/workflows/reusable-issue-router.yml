@@ -86,6 +86,7 @@ jobs:
       issues: write
     env:
       GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
       ISSUE_NUMBER: ${{ inputs.issue_number }}
       KIND: ${{ needs.classify.outputs.kind }}
     steps:

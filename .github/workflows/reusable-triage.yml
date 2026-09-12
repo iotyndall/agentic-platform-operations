@@ -60,7 +60,8 @@ jobs:
           set -euo pipefail
           printf '%s' "$TRIAGE" > "$RUNNER_TEMP/triage.json"
           jq -e '.severity and .risk and .recommended_action and .confidence' "$RUNNER_TEMP/triage.json" >/dev/null
-          { echo 'triage_json<<__TRIAGE__'; cat "$RUNNER_TEMP/triage.json"; echo '__TRIAGE__'; } >> "$GITHUB_OUTPUT"
+          COMPACT="$(jq -c . "$RUNNER_TEMP/triage.json")"
+          printf 'triage_json=%s\n' "$COMPACT" >> "$GITHUB_OUTPUT"
 
   publish:
     needs: analyze
@@ -71,6 +72,7 @@ jobs:
       issues: write
     env:
       GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
       ISSUE_NUMBER: ${{ inputs.issue_number }}
       TRIAGE_JSON: ${{ needs.analyze.outputs.triage_json }}
     steps:

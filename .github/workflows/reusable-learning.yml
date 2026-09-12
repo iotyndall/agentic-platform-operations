@@ -77,7 +77,8 @@ jobs:
           jq -e '.lesson.observations|length>0' "$F" >/dev/null
           jq -e '.lesson.preventiveControls|length>0' "$F" >/dev/null
           jq -e '.postmortem.durable_improvements|length>0' "$F" >/dev/null
-          { echo 'learning_json<<__LEARNING__'; cat "$F"; echo '__LEARNING__'; } >> "$GITHUB_OUTPUT"
+          COMPACT="$(jq -c . "$F")"
+          printf 'learning_json=%s\n' "$COMPACT" >> "$GITHUB_OUTPUT"
 
   publish:
     needs: analyze

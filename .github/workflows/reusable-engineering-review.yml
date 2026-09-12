@@ -84,7 +84,8 @@ jobs:
           case "$DISP" in PASS|REVISE|ESCALATE) ;; *) exit 1 ;; esac
           case "$RISK" in low|moderate|high|critical) ;; *) exit 1 ;; esac
           if [ "$DISP" = PASS ]; then test "$READY" = true; else test "$READY" = false; fi
-          { echo 'review_json<<__REVIEW__'; cat "$F"; echo '__REVIEW__'; } >> "$GITHUB_OUTPUT"
+          COMPACT="$(jq -c . "$F")"
+          printf 'review_json=%s\n' "$COMPACT" >> "$GITHUB_OUTPUT"
 
   publish:
     needs: analyze
@@ -96,6 +97,7 @@ jobs:
       issues: write
     env:
       GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
       PR_NUMBER: ${{ inputs.pull_request_number }}
       EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
       REVIEW_JSON: ${{ needs.analyze.outputs.review_json }}
